@@ -9,13 +9,13 @@ app = Flask(**name**)
 
 class MultiTimeframeSRFinder:
 def **init**(self, timeframe_data, min_touches=4, atr_tolerance_pct=0.1):
-“””
-Multi-timeframe Support & Resistance finder
-Parameters:
-timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
-min_touches: Minimum touches needed across all timeframes
-atr_tolerance_pct: Tolerance as % of ATR for grouping levels
-"""
+
+# Multi-timeframe Support & Resistance finder
+# Parameters:
+# timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
+# min_touches: Minimum touches needed across all timeframes
+# atr_tolerance_pct: Tolerance as % of ATR for grouping levels
+
     self.timeframe_data = timeframe_data
     self.min_touches = min_touches
     self.atr_tolerance_pct = atr_tolerance_pct / 100.0
@@ -23,7 +23,7 @@ atr_tolerance_pct: Tolerance as % of ATR for grouping levels
     self.prepare_data()
     
 def prepare_data(self):
-    """Calculate ATR for each timeframe and determine overall tolerance"""
+    # Calculate ATR for each timeframe and determine overall tolerance
     self.atr_values = {}
     
     for timeframe, df in self.timeframe_data.items():
