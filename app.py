@@ -422,7 +422,7 @@ HTML_TEMPLATE =
 # Use standard single quotes
 @app.route('/', methods=['GET', 'POST'])
 def index():
-if request.method == 'GET’:
+if request.method == 'GET':
 return render_template_string(HTML_TEMPLATE)
 
 try:
@@ -553,5 +553,5 @@ def health():
 return jsonify({'status’: 'healthy’})
 
 if **name** == '**main**’:
-port = int(os.environ.get('PORT’, 5000))
+port = int(os.environ.get('PORT', 5000))
 app.run(host='0.0.0.0’, port=port, debug=True)
