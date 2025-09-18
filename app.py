@@ -5,7 +5,7 @@ from collections import defaultdict
 import io
 import os
 
-app = Flask(**name**)
+app = Flask("sr-lvl")
 
 class MultiTimeframeSRFinder:
 def **init**(self, timeframe_data, min_touches=4, atr_tolerance_pct=0.1):
