@@ -441,15 +441,15 @@ def index():
         df_1d = pd.read_csv(io.StringIO(csv_data))
         
         # Validate columns
-        required_cols = ['Open', 'High', 'Low', 'Close']
+        required_cols = ['open', 'high', 'low', 'close']
         missing_cols = [col for col in required_cols if col not in df_1d.columns]
         if missing_cols:
             raise ValueError(f"Missing required columns in 1D file: {', '.join(missing_cols)}")
         
-        if 'Date' in df_1d.columns:
-            df_1d['Date'] = pd.to_datetime(df_1d['Date'])
-            df_1d.set_index('Date', inplace=True)
-        
+        if 'time' in df_1d.columns:
+            df_1d['time'] = pd.to_datetime(df_1d['time'])
+            df_1d.set_index('time', inplace=True)
+
         timeframe_data['1D'] = df_1d
         
         # Process optional 4H file
@@ -459,10 +459,10 @@ def index():
                 csv_data_4h = file_4h.read().decode('utf-8')
                 df_4h = pd.read_csv(io.StringIO(csv_data_4h))
                 
-                if 'Date' in df_4h.columns:
-                    df_4h['Date'] = pd.to_datetime(df_4h['Date'])
-                    df_4h.set_index('Date', inplace=True)
-                
+                if 'time' in df_4h.columns:
+                    df_4h['time'] = pd.to_datetime(df_4h['time'])
+                    df_4h.set_index('time', inplace=True)
+
                 timeframe_data['4H'] = df_4h
             except Exception as e:
                 print(f"Warning: Could not process 4H file: {e}")
@@ -474,10 +474,10 @@ def index():
                 csv_data_1h = file_1h.read().decode('utf-8')
                 df_1h = pd.read_csv(io.StringIO(csv_data_1h))
                 
-                if 'Date' in df_1h.columns:
-                    df_1h['Date'] = pd.to_datetime(df_1h['Date'])
-                    df_1h.set_index('Date', inplace=True)
-                
+                if 'time' in df_1h.columns:
+                    df_1h['time'] = pd.to_datetime(df_1h['time'])
+                    df_1h.set_index('time', inplace=True)
+
                 timeframe_data['1H'] = df_1h
             except Exception as e:
                 print(f"Warning: Could not process 1H file: {e}")
