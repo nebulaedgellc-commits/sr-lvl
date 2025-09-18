@@ -173,7 +173,6 @@ def get_detailed_results(self):
         'timeframes_used': list(self.timeframe_data.keys()),
         'atr_values': self.atr_values
     }
-```
 
 # HTML template for multi-timeframe interface
 
@@ -317,7 +316,7 @@ HTML_TEMPLATE = ‘’’
         <h1>Multi-Timeframe S&R Level Finder</h1>
         <div class="subtitle">Upload multiple timeframes for stronger support & resistance levels</div>
 
-```
+
     <div class="info">
         <strong>How it works:</strong><br>
         • Upload 1D OHLC data (required) + optional 4H and 1H data<br>
@@ -420,14 +419,13 @@ HTML_TEMPLATE = ‘’’
 
 </body>
 </html>
-'''
+
 
 @app.route(’/’, methods=[‘GET’, ‘POST’])
 def index():
 if request.method == ‘GET’:
 return render_template_string(HTML_TEMPLATE)
 
-```
 try:
     # Get form data
     min_touches = int(request.form.get('min_touches', 4))
@@ -499,7 +497,7 @@ try:
     
 except Exception as e:
     return render_template_string(HTML_TEMPLATE, error=str(e))
-```
+
 
 @app.route(’/api/analyze-multi’, methods=[‘POST’])
 def api_analyze_multi():
@@ -508,7 +506,7 @@ try:
 min_touches = int(request.form.get(‘min_touches’, 4))
 atr_tolerance = float(request.form.get(‘atr_tolerance’, 0.1))
 
-```
+
     timeframe_data = {}
     
     # Process files
@@ -549,7 +547,7 @@ atr_tolerance = float(request.form.get(‘atr_tolerance’, 0.1))
     
 except Exception as e:
     return jsonify({'error': str(e)}), 400
-```
+
 
 @app.route(’/health’)
 def health():
