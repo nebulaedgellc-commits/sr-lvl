@@ -176,8 +176,7 @@ def get_detailed_results(self):
 
 # HTML template for multi-timeframe interface
 
-HTML_TEMPLATE = 
-""" <!DOCTYPE html>
+HTML_TEMPLATE = """ <!DOCTYPE html>
 
 <html>
 <head>
@@ -422,136 +421,136 @@ HTML_TEMPLATE =
 # Use standard single quotes
 @app.route('/', methods=['GET', 'POST'])
 def index():
-if request.method == 'GET':
-return render_template_string(HTML_TEMPLATE)
+    if request.method == 'GET':
+        return render_template_string(HTML_TEMPLATE)
 
-try:
-    # Get form data
-    min_touches = int(request.form.get('min_touches', 4))
-    atr_tolerance = float(request.form.get('atr_tolerance', 0.1))
-    
-    # Process uploaded files
-    timeframe_data = {}
-    
-    # Check for required 1D file
-    if 'file_1d' not in request.files or request.files['file_1d'].filename == '':
-        raise ValueError("1D timeframe file is required")
-    
-    # Process 1D file (required)
-    file_1d = request.files['file_1d']
-    csv_data = file_1d.read().decode('utf-8')
-    df_1d = pd.read_csv(io.StringIO(csv_data))
-    
-    # Validate columns
-    required_cols = ['Open', 'High', 'Low', 'Close']
-    missing_cols = [col for col in required_cols if col not in df_1d.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns in 1D file: {', '.join(missing_cols)}")
-    
-    if 'Date' in df_1d.columns:
-        df_1d['Date'] = pd.to_datetime(df_1d['Date'])
-        df_1d.set_index('Date', inplace=True)
-    
-    timeframe_data['1D'] = df_1d
-    
-    # Process optional 4H file
-    if 'file_4h' in request.files and request.files['file_4h'].filename != '':
-        try:
-            file_4h = request.files['file_4h']
-            csv_data_4h = file_4h.read().decode('utf-8')
-            df_4h = pd.read_csv(io.StringIO(csv_data_4h))
-            
-            if 'Date' in df_4h.columns:
-                df_4h['Date'] = pd.to_datetime(df_4h['Date'])
-                df_4h.set_index('Date', inplace=True)
-            
-            timeframe_data['4H'] = df_4h
-        except Exception as e:
-            print(f"Warning: Could not process 4H file: {e}")
-    
-    # Process optional 1H file
-    if 'file_1h' in request.files and request.files['file_1h'].filename != '':
-        try:
-            file_1h = request.files['file_1h']
-            csv_data_1h = file_1h.read().decode('utf-8')
-            df_1h = pd.read_csv(io.StringIO(csv_data_1h))
-            
-            if 'Date' in df_1h.columns:
-                df_1h['Date'] = pd.to_datetime(df_1h['Date'])
-                df_1h.set_index('Date', inplace=True)
-            
-            timeframe_data['1H'] = df_1h
-        except Exception as e:
-            print(f"Warning: Could not process 1H file: {e}")
-    
-    # Analyze multi-timeframe levels
-    finder = MultiTimeframeSRFinder(timeframe_data, min_touches, atr_tolerance)
-    results = finder.get_detailed_results()
-    
-    # Add form parameters to results
-    results['min_touches'] = min_touches
-    results['atr_tolerance'] = atr_tolerance
-    
-    return render_template_string(HTML_TEMPLATE, result=results)
-    
-except Exception as e:
-    return render_template_string(HTML_TEMPLATE, error=str(e))
-
-
-@app.route(’/api/analyze-multi’, methods=['POST’])
-def api_analyze_multi():
-“”“API endpoint for multi-timeframe analysis”””
-try:
-min_touches = int(request.form.get('min_touches’, 4))
-atr_tolerance = float(request.form.get('atr_tolerance’, 0.1))
-
-
-    timeframe_data = {}
-    
-    # Process files
-    if 'file_1d' not in request.files:
-        return jsonify({'error': '1D file is required'}), 400
-    
-    # Process 1D (required)
-    file_1d = request.files['file_1d']
-    csv_data = file_1d.read().decode('utf-8')
-    df = pd.read_csv(io.StringIO(csv_data))
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
-    timeframe_data['1D'] = df
-    
-    # Process optional files
-    for tf_key, file_key in [('4H', 'file_4h'), ('1H', 'file_1h')]:
-        if file_key in request.files and request.files[file_key].filename != '':
+    try:
+        # Get form data
+        min_touches = int(request.form.get('min_touches', 4))
+        atr_tolerance = float(request.form.get('atr_tolerance', 0.1))
+        
+        # Process uploaded files
+        timeframe_data = {}
+        
+        # Check for required 1D file
+        if 'file_1d' not in request.files or request.files['file_1d'].filename == '':
+            raise ValueError("1D timeframe file is required")
+        
+        # Process 1D file (required)
+        file_1d = request.files['file_1d']
+        csv_data = file_1d.read().decode('utf-8')
+        df_1d = pd.read_csv(io.StringIO(csv_data))
+        
+        # Validate columns
+        required_cols = ['Open', 'High', 'Low', 'Close']
+        missing_cols = [col for col in required_cols if col not in df_1d.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns in 1D file: {', '.join(missing_cols)}")
+        
+        if 'Date' in df_1d.columns:
+            df_1d['Date'] = pd.to_datetime(df_1d['Date'])
+            df_1d.set_index('Date', inplace=True)
+        
+        timeframe_data['1D'] = df_1d
+        
+        # Process optional 4H file
+        if 'file_4h' in request.files and request.files['file_4h'].filename != '':
             try:
-                file_data = request.files[file_key].read().decode('utf-8')
-                df_tf = pd.read_csv(io.StringIO(file_data))
-                if 'Date' in df_tf.columns:
-                    df_tf['Date'] = pd.to_datetime(df_tf['Date'])
-                    df_tf.set_index('Date', inplace=True)
-                timeframe_data[tf_key] = df_tf
+                file_4h = request.files['file_4h']
+                csv_data_4h = file_4h.read().decode('utf-8')
+                df_4h = pd.read_csv(io.StringIO(csv_data_4h))
+                
+                if 'Date' in df_4h.columns:
+                    df_4h['Date'] = pd.to_datetime(df_4h['Date'])
+                    df_4h.set_index('Date', inplace=True)
+                
+                timeframe_data['4H'] = df_4h
             except Exception as e:
-                print(f"Warning: Could not process {tf_key} file: {e}")
-    
-    finder = MultiTimeframeSRFinder(timeframe_data, min_touches, atr_tolerance)
-    results = finder.get_detailed_results()
-    
-    return jsonify({
-        'success': True,
-        'levels': results['levels_csv'],
-        'count': results['total_count'],
-        'timeframes_used': results['timeframes_used']
-    })
-    
-except Exception as e:
-    return jsonify({'error': str(e)}), 400
+                print(f"Warning: Could not process 4H file: {e}")
+        
+        # Process optional 1H file
+        if 'file_1h' in request.files and request.files['file_1h'].filename != '':
+            try:
+                file_1h = request.files['file_1h']
+                csv_data_1h = file_1h.read().decode('utf-8')
+                df_1h = pd.read_csv(io.StringIO(csv_data_1h))
+                
+                if 'Date' in df_1h.columns:
+                    df_1h['Date'] = pd.to_datetime(df_1h['Date'])
+                    df_1h.set_index('Date', inplace=True)
+                
+                timeframe_data['1H'] = df_1h
+            except Exception as e:
+                print(f"Warning: Could not process 1H file: {e}")
+        
+        # Analyze multi-timeframe levels
+        finder = MultiTimeframeSRFinder(timeframe_data, min_touches, atr_tolerance)
+        results = finder.get_detailed_results()
+        
+        # Add form parameters to results
+        results['min_touches'] = min_touches
+        results['atr_tolerance'] = atr_tolerance
+        
+        return render_template_string(HTML_TEMPLATE, result=results)
+        
+    except Exception as e:
+        return render_template_string(HTML_TEMPLATE, error=str(e))
 
 
-@app.route(’/health’)
+@app.route('/api/analyze-multi', methods=['POST'])
+def api_analyze_multi():
+    """API endpoint for multi-timeframe analysis"""
+    try:
+        min_touches = int(request.form.get('min_touches', 4))
+        atr_tolerance = float(request.form.get('atr_tolerance', 0.1))
+
+        timeframe_data = {}
+        
+        # Process files
+        if 'file_1d' not in request.files:
+            return jsonify({'error': '1D file is required'}), 400
+        
+        # Process 1D (required)
+        file_1d = request.files['file_1d']
+        csv_data = file_1d.read().decode('utf-8')
+        df = pd.read_csv(io.StringIO(csv_data))
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df.set_index('Date', inplace=True)
+        timeframe_data['1D'] = df
+        
+        # Process optional files
+        for tf_key, file_key in [('4H', 'file_4h'), ('1H', 'file_1h')]:
+            if file_key in request.files and request.files[file_key].filename != '':
+                try:
+                    file_data = request.files[file_key].read().decode('utf-8')
+                    df_tf = pd.read_csv(io.StringIO(file_data))
+                    if 'Date' in df_tf.columns:
+                        df_tf['Date'] = pd.to_datetime(df_tf['Date'])
+                        df_tf.set_index('Date', inplace=True)
+                    timeframe_data[tf_key] = df_tf
+                except Exception as e:
+                    print(f"Warning: Could not process {tf_key} file: {e}")
+        
+        finder = MultiTimeframeSRFinder(timeframe_data, min_touches, atr_tolerance)
+        results = finder.get_detailed_results()
+        
+        return jsonify({
+            'success': True,
+            'levels': results['levels_csv'],
+            'count': results['total_count'],
+            'timeframes_used': results['timeframes_used']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/health')
 def health():
-return jsonify({'status’: 'healthy’})
+    return jsonify({'status': 'healthy'})
 
-if **name** == '**main**’:
-port = int(os.environ.get('PORT', 5000))
-app.run(host='0.0.0.0’, port=port, debug=True)
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
