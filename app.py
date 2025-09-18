@@ -177,8 +177,7 @@ def get_detailed_results(self):
 # HTML template for multi-timeframe interface
 
 HTML_TEMPLATE = 
-
-<!DOCTYPE html>
+""" <!DOCTYPE html>
 
 <html>
 <head>
@@ -415,11 +414,10 @@ HTML_TEMPLATE =
     </div>
     {% endif %}
 </div>
-```
 
 </body>
 </html>
-
+"""
 
 @app.route(’/’, methods=[‘GET’, ‘POST’])
 def index():
