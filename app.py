@@ -29,10 +29,10 @@ class MultiTimeframeSRFinder:
             df_copy = df.copy()
             
             # Calculate ATR
-            high_low = df_copy['High'] - df_copy['Low']
-            high_close = np.abs(df_copy['High'] - df_copy['Close'].shift())
-            low_close = np.abs(df_copy['Low'] - df_copy['Close'].shift())
-            
+            high_low = df_copy['high'] - df_copy['low']
+            high_close = np.abs(df_copy['high'] - df_copy['close'].shift())
+            low_close = np.abs(df_copy['low'] - df_copy['close'].shift())
+
             true_range = np.maximum(high_low, np.maximum(high_close, low_close))
             df_copy['ATR'] = true_range.rolling(window=14).mean()
             df_copy.dropna(inplace=True)
@@ -54,7 +54,7 @@ class MultiTimeframeSRFinder:
         
         # Find resistance levels (highs)
         resistance_counts = defaultdict(list)
-        for i, high_price in enumerate(df['High']):
+        for i, high_price in enumerate(df['high']):
             price_level = round(high_price, 2)
             resistance_counts[price_level].append((i, high_price))
         
@@ -71,7 +71,7 @@ class MultiTimeframeSRFinder:
         
         # Find support levels (lows)  
         support_counts = defaultdict(list)
-        for i, low_price in enumerate(df['Low']):
+        for i, low_price in enumerate(df['low']):
             price_level = round(low_price, 2)
             support_counts[price_level].append((i, low_price))
         
@@ -513,9 +513,9 @@ def api_analyze_multi():
         file_1d = request.files['file_1d']
         csv_data = file_1d.read().decode('utf-8')
         df = pd.read_csv(io.StringIO(csv_data))
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
+        if 'time' in df.columns:
+            df['time'] = pd.to_datetime(df['time'])
+            df.set_index('time', inplace=True)
         timeframe_data['1D'] = df
         
         # Process optional files
@@ -524,9 +524,9 @@ def api_analyze_multi():
                 try:
                     file_data = request.files[file_key].read().decode('utf-8')
                     df_tf = pd.read_csv(io.StringIO(file_data))
-                    if 'Date' in df_tf.columns:
-                        df_tf['Date'] = pd.to_datetime(df_tf['Date'])
-                        df_tf.set_index('Date', inplace=True)
+                    if 'time' in df_tf.columns:
+                        df_tf['time'] = pd.to_datetime(df_tf['time'])
+                        df_tf.set_index('time', inplace=True)
                     timeframe_data[tf_key] = df_tf
                 except Exception as e:
                     print(f"Warning: Could not process {tf_key} file: {e}")
