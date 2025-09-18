@@ -5,174 +5,173 @@ from collections import defaultdict
 import io
 import os
 
-app = Flask(__name__)
+app = Flask("sr-lvl")
 
 class MultiTimeframeSRFinder:
-def **init**(self, timeframe_data, min_touches=4, atr_tolerance_pct=0.1):
+    def __init__(self, timeframe_data, min_touches=4, atr_tolerance_pct=0.1):
+        # Multi-timeframe Support & Resistance finder
+        # Parameters:
+        # timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
+        # min_touches: Minimum touches needed across all timeframes
+        # atr_tolerance_pct: Tolerance as % of ATR for grouping levels
 
-# Multi-timeframe Support & Resistance finder
-# Parameters:
-# timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
-# min_touches: Minimum touches needed across all timeframes
-# atr_tolerance_pct: Tolerance as % of ATR for grouping levels
-
-    self.timeframe_data = timeframe_data
-    self.min_touches = min_touches
-    self.atr_tolerance_pct = atr_tolerance_pct / 100.0
-    self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}  # Weight importance
-    self.prepare_data()
-    
-def prepare_data(self):
-    # Calculate ATR for each timeframe and determine overall tolerance
-    self.atr_values = {}
-    
-    for timeframe, df in self.timeframe_data.items():
-        df_copy = df.copy()
+        self.timeframe_data = timeframe_data
+        self.min_touches = min_touches
+        self.atr_tolerance_pct = atr_tolerance_pct / 100.0
+        self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}  # Weight importance
+        self.prepare_data()
         
-        # Calculate ATR
-        high_low = df_copy['High'] - df_copy['Low']
-        high_close = np.abs(df_copy['High'] - df_copy['Close'].shift())
-        low_close = np.abs(df_copy['Low'] - df_copy['Close'].shift())
+    def prepare_data(self):
+        # Calculate ATR for each timeframe and determine overall tolerance
+        self.atr_values = {}
         
-        true_range = np.maximum(high_low, np.maximum(high_close, low_close))
-        df_copy['ATR'] = true_range.rolling(window=14).mean()
-        df_copy.dropna(inplace=True)
-        
-        self.timeframe_data[timeframe] = df_copy
-        self.atr_values[timeframe] = df_copy['ATR'].mean()
-    
-    # Use the highest timeframe ATR for tolerance (usually 1D)
-    primary_atr = max(self.atr_values.values())
-    self.tolerance = primary_atr * self.atr_tolerance_pct
-    
-    print(f"ATR Values: {self.atr_values}")
-    print(f"Using tolerance: {self.tolerance:.4f}")
-
-def find_levels_for_timeframe(self, timeframe, df):
-    """Find support and resistance levels for a single timeframe"""
-    levels = []
-    weight = self.timeframe_weights.get(timeframe, 1)
-    
-    # Find resistance levels (highs)
-    resistance_counts = defaultdict(list)
-    for i, high_price in enumerate(df['High']):
-        price_level = round(high_price, 2)
-        resistance_counts[price_level].append((i, high_price))
-    
-    for level, touches in resistance_counts.items():
-        if len(touches) >= 2:  # Lower threshold per timeframe
-            levels.append({
-                'level': level,
-                'type': 'Resistance',
-                'touches': len(touches),
-                'timeframe': timeframe,
-                'weight': weight,
-                'weighted_touches': len(touches) * weight
-            })
-    
-    # Find support levels (lows)  
-    support_counts = defaultdict(list)
-    for i, low_price in enumerate(df['Low']):
-        price_level = round(low_price, 2)
-        support_counts[price_level].append((i, low_price))
-    
-    for level, touches in support_counts.items():
-        if len(touches) >= 2:  # Lower threshold per timeframe
-            levels.append({
-                'level': level,
-                'type': 'Support', 
-                'touches': len(touches),
-                'timeframe': timeframe,
-                'weight': weight,
-                'weighted_touches': len(touches) * weight
-            })
-    
-    return levels
-
-def combine_multi_timeframe_levels(self):
-    """Combine levels from all timeframes and find the strongest ones"""
-    all_levels = []
-    
-    # Get levels from each timeframe
-    for timeframe, df in self.timeframe_data.items():
-        tf_levels = self.find_levels_for_timeframe(timeframe, df)
-        all_levels.extend(tf_levels)
-    
-    # Group similar levels across timeframes
-    grouped_levels = self.group_similar_levels(all_levels)
-    
-    # Filter by minimum combined touches
-    strong_levels = []
-    for group in grouped_levels:
-        total_touches = sum(level['touches'] for level in group)
-        total_weighted_touches = sum(level['weighted_touches'] for level in group)
-        
-        if total_touches >= self.min_touches:
-            # Use weighted average for final level price
-            weighted_sum = sum(level['level'] * level['weighted_touches'] for level in group)
-            final_level = weighted_sum / total_weighted_touches
+        for timeframe, df in self.timeframe_data.items():
+            df_copy = df.copy()
             
-            # Determine type (majority vote)
-            types = [level['type'] for level in group]
-            final_type = max(set(types), key=types.count)
+            # Calculate ATR
+            high_low = df_copy['High'] - df_copy['Low']
+            high_close = np.abs(df_copy['High'] - df_copy['Close'].shift())
+            low_close = np.abs(df_copy['Low'] - df_copy['Close'].shift())
             
-            # Get timeframes involved
-            timeframes = list(set(level['timeframe'] for level in group))
+            true_range = np.maximum(high_low, np.maximum(high_close, low_close))
+            df_copy['ATR'] = true_range.rolling(window=14).mean()
+            df_copy.dropna(inplace=True)
             
-            strong_levels.append({
-                'level': final_level,
-                'type': final_type,
-                'touches': total_touches,
-                'weighted_touches': total_weighted_touches,
-                'timeframes': timeframes,
-                'timeframe_count': len(timeframes)
-            })
-    
-    # Sort by weighted touches and timeframe count (multi-timeframe levels are stronger)
-    strong_levels.sort(key=lambda x: (x['timeframe_count'], x['weighted_touches']), reverse=True)
-    
-    return strong_levels
+            self.timeframe_data[timeframe] = df_copy
+            self.atr_values[timeframe] = df_copy['ATR'].mean()
+        
+        # Use the highest timeframe ATR for tolerance (usually 1D)
+        primary_atr = max(self.atr_values.values())
+        self.tolerance = primary_atr * self.atr_tolerance_pct
+        
+        print(f"ATR Values: {self.atr_values}")
+        print(f"Using tolerance: {self.tolerance:.4f}")
 
-def group_similar_levels(self, all_levels):
-    """Group levels that are within tolerance of each other"""
-    if not all_levels:
-        return []
-    
-    # Sort levels by price
-    sorted_levels = sorted(all_levels, key=lambda x: x['level'])
-    groups = []
-    current_group = [sorted_levels[0]]
-    
-    for level in sorted_levels[1:]:
-        # Check if this level is close to any level in current group
-        if any(abs(level['level'] - group_level['level']) <= self.tolerance 
-               for group_level in current_group):
-            current_group.append(level)
-        else:
-            # Start new group
-            groups.append(current_group)
-            current_group = [level]
-    
-    groups.append(current_group)  # Add the last group
-    
-    return groups
+    def find_levels_for_timeframe(self, timeframe, df):
+        """Find support and resistance levels for a single timeframe"""
+        levels = []
+        weight = self.timeframe_weights.get(timeframe, 1)
+        
+        # Find resistance levels (highs)
+        resistance_counts = defaultdict(list)
+        for i, high_price in enumerate(df['High']):
+            price_level = round(high_price, 2)
+            resistance_counts[price_level].append((i, high_price))
+        
+        for level, touches in resistance_counts.items():
+            if len(touches) >= 2:  # Lower threshold per timeframe
+                levels.append({
+                    'level': level,
+                    'type': 'Resistance',
+                    'touches': len(touches),
+                    'timeframe': timeframe,
+                    'weight': weight,
+                    'weighted_touches': len(touches) * weight
+                })
+        
+        # Find support levels (lows)  
+        support_counts = defaultdict(list)
+        for i, low_price in enumerate(df['Low']):
+            price_level = round(low_price, 2)
+            support_counts[price_level].append((i, low_price))
+        
+        for level, touches in support_counts.items():
+            if len(touches) >= 2:  # Lower threshold per timeframe
+                levels.append({
+                    'level': level,
+                    'type': 'Support', 
+                    'touches': len(touches),
+                    'timeframe': timeframe,
+                    'weight': weight,
+                    'weighted_touches': len(touches) * weight
+                })
+        
+        return levels
 
-def get_levels_only(self):
-    """Get only the price levels as comma-separated string"""
-    levels = self.combine_multi_timeframe_levels()
-    level_prices = [f"{level['level']:.2f}" for level in levels]
-    return ",".join(level_prices)
+    def combine_multi_timeframe_levels(self):
+        """Combine levels from all timeframes and find the strongest ones"""
+        all_levels = []
+        
+        # Get levels from each timeframe
+        for timeframe, df in self.timeframe_data.items():
+            tf_levels = self.find_levels_for_timeframe(timeframe, df)
+            all_levels.extend(tf_levels)
+        
+        # Group similar levels across timeframes
+        grouped_levels = self.group_similar_levels(all_levels)
+        
+        # Filter by minimum combined touches
+        strong_levels = []
+        for group in grouped_levels:
+            total_touches = sum(level['touches'] for level in group)
+            total_weighted_touches = sum(level['weighted_touches'] for level in group)
+            
+            if total_touches >= self.min_touches:
+                # Use weighted average for final level price
+                weighted_sum = sum(level['level'] * level['weighted_touches'] for level in group)
+                final_level = weighted_sum / total_weighted_touches
+                
+                # Determine type (majority vote)
+                types = [level['type'] for level in group]
+                final_type = max(set(types), key=types.count)
+                
+                # Get timeframes involved
+                timeframes = list(set(level['timeframe'] for level in group))
+                
+                strong_levels.append({
+                    'level': final_level,
+                    'type': final_type,
+                    'touches': total_touches,
+                    'weighted_touches': total_weighted_touches,
+                    'timeframes': timeframes,
+                    'timeframe_count': len(timeframes)
+                })
+        
+        # Sort by weighted touches and timeframe count (multi-timeframe levels are stronger)
+        strong_levels.sort(key=lambda x: (x['timeframe_count'], x['weighted_touches']), reverse=True)
+        
+        return strong_levels
 
-def get_detailed_results(self):
-    """Get detailed results for analysis"""
-    levels = self.combine_multi_timeframe_levels()
-    return {
-        'levels_csv': self.get_levels_only(),
-        'total_count': len(levels),
-        'detailed_levels': levels,
-        'timeframes_used': list(self.timeframe_data.keys()),
-        'atr_values': self.atr_values
-    }
+    def group_similar_levels(self, all_levels):
+        """Group levels that are within tolerance of each other"""
+        if not all_levels:
+            return []
+        
+        # Sort levels by price
+        sorted_levels = sorted(all_levels, key=lambda x: x['level'])
+        groups = []
+        current_group = [sorted_levels[0]]
+        
+        for level in sorted_levels[1:]:
+            # Check if this level is close to any level in current group
+            if any(abs(level['level'] - group_level['level']) <= self.tolerance 
+                   for group_level in current_group):
+                current_group.append(level)
+            else:
+                # Start new group
+                groups.append(current_group)
+                current_group = [level]
+        
+        groups.append(current_group)  # Add the last group
+        
+        return groups
+
+    def get_levels_only(self):
+        """Get only the price levels as comma-separated string"""
+        levels = self.combine_multi_timeframe_levels()
+        level_prices = [f"{level['level']:.2f}" for level in levels]
+        return ",".join(level_prices)
+
+    def get_detailed_results(self):
+        """Get detailed results for analysis"""
+        levels = self.combine_multi_timeframe_levels()
+        return {
+            'levels_csv': self.get_levels_only(),
+            'total_count': len(levels),
+            'detailed_levels': levels,
+            'timeframes_used': list(self.timeframe_data.keys()),
+            'atr_values': self.atr_values
+        }
 
 # HTML template for multi-timeframe interface
 
