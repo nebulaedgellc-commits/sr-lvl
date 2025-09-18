@@ -419,7 +419,8 @@ HTML_TEMPLATE =
 </html>
 """
 
-@app.route(’/’, methods=[‘GET’, ‘POST’])
+# Use standard single quotes
+@app.route('/', methods=['GET', 'POST'])
 def index():
 if request.method == ‘GET’:
 return render_template_string(HTML_TEMPLATE)
