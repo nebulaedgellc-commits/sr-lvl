@@ -422,7 +422,7 @@ HTML_TEMPLATE =
 # Use standard single quotes
 @app.route('/', methods=['GET', 'POST'])
 def index():
-if request.method == ‘GET’:
+if request.method == 'GET’:
 return render_template_string(HTML_TEMPLATE)
 
 try:
@@ -498,12 +498,12 @@ except Exception as e:
     return render_template_string(HTML_TEMPLATE, error=str(e))
 
 
-@app.route(’/api/analyze-multi’, methods=[‘POST’])
+@app.route(’/api/analyze-multi’, methods=['POST’])
 def api_analyze_multi():
 “”“API endpoint for multi-timeframe analysis”””
 try:
-min_touches = int(request.form.get(‘min_touches’, 4))
-atr_tolerance = float(request.form.get(‘atr_tolerance’, 0.1))
+min_touches = int(request.form.get('min_touches’, 4))
+atr_tolerance = float(request.form.get('atr_tolerance’, 0.1))
 
 
     timeframe_data = {}
@@ -550,8 +550,8 @@ except Exception as e:
 
 @app.route(’/health’)
 def health():
-return jsonify({‘status’: ‘healthy’})
+return jsonify({'status’: 'healthy’})
 
-if **name** == ‘**main**’:
-port = int(os.environ.get(‘PORT’, 5000))
-app.run(host=‘0.0.0.0’, port=port, debug=True)
+if **name** == '**main**’:
+port = int(os.environ.get('PORT’, 5000))
+app.run(host='0.0.0.0’, port=port, debug=True)
