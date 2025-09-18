@@ -11,13 +11,11 @@ class MultiTimeframeSRFinder:
 def **init**(self, timeframe_data, min_touches=4, atr_tolerance_pct=0.1):
 “””
 Multi-timeframe Support & Resistance finder
-
-```
-    Parameters:
-    timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
-    min_touches: Minimum touches needed across all timeframes
-    atr_tolerance_pct: Tolerance as % of ATR for grouping levels
-    """
+Parameters:
+timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
+min_touches: Minimum touches needed across all timeframes
+atr_tolerance_pct: Tolerance as % of ATR for grouping levels
+"""
     self.timeframe_data = timeframe_data
     self.min_touches = min_touches
     self.atr_tolerance_pct = atr_tolerance_pct / 100.0
