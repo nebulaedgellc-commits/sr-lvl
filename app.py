@@ -176,7 +176,7 @@ def get_detailed_results(self):
 
 # HTML template for multi-timeframe interface
 
-HTML_TEMPLATE = ‘’’
+HTML_TEMPLATE = 
 
 <!DOCTYPE html>
 
