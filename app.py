@@ -56,7 +56,7 @@ class MultiTimeframeSRFinder:
                 df_copy.rename(columns=column_mapping, inplace=True)
             
             # Ensure we have required columns
-            required_cols = ['Open', 'High', 'Low', 'Close']
+            required_cols = ['open', 'high', 'low', 'close']
             missing_cols = [col for col in required_cols if col not in df_copy.columns]
             if missing_cols:
                 # Try alternative column names
@@ -625,7 +625,7 @@ def index():
         df_1d = pd.read_csv(io.StringIO(csv_data))
         
         # Validate columns
-        required_cols = ['Open', 'High', 'Low', 'Close']
+        required_cols = ['open', 'high', 'low', 'close']
         missing_cols = [col for col in required_cols if col not in df_1d.columns]
         if missing_cols:
             raise ValueError(f"Missing required columns in 1D file: {', '.join(missing_cols)}")
