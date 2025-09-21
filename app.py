@@ -84,8 +84,8 @@ class MultiTimeframeSRFinder:
         
         print(f"Current price: ${self.current_price:.2f}")
         print(f"Tolerance: {self.tolerance_percentage*100:.3f}% = ${self.tolerance:.3f}")
-        print(f"Grouping method: {self.grouping_method}")
-        print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")f}% = ${self.tolerance:.3f}")
+        print(f"Grouping method: {self.grouping_method}") 
+        print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")
         print(f"Grouping method: {self.grouping_method}")
         print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")
     
@@ -846,4 +846,4 @@ def health():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0
+    app.run(host='0.0.0.0')
