@@ -24,11 +24,7 @@ class MultiTimeframeSRFinder:
         self.grouping_method = grouping_method
         self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}
         self.prepare_data()
-        self.timeframe_data = timeframe_data
-        self.min_touches = min_touches
-        self.tolerance_percentage = tolerance_percentage / 100.0  # Convert to decimal
-        self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}  # Weight importance
-        self.prepare_data()
+    
         
     def prepare_data(self):
         """Calculate current price and set tolerance, handle different column formats"""
@@ -84,8 +80,6 @@ class MultiTimeframeSRFinder:
         
         print(f"Current price: ${self.current_price:.2f}")
         print(f"Tolerance: {self.tolerance_percentage*100:.3f}% = ${self.tolerance:.3f}")
-        print(f"Grouping method: {self.grouping_method}") 
-        print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")
         print(f"Grouping method: {self.grouping_method}")
         print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")
     
@@ -626,16 +620,42 @@ def index():
         csv_data = file_1d.read().decode('utf-8')
         df_1d = pd.read_csv(io.StringIO(csv_data))
         
-        # Validate columns
+        # Debug: show original columns
+        print(f"Original columns: {list(df_1d.columns)}")
+        
+        # Simple column standardization - handle the most common cases
+        df_1d.columns = df_1d.columns.str.lower().str.strip()
+        
+        # Map to standard names
+        column_map = {
+            'time': 'Date',
+            'date': 'Date', 
+            'datetime': 'Date',
+            'open': 'Open',
+            'high': 'High', 
+            'low': 'Low',
+            'close': 'Close',
+            'volume': 'Volume',
+            'vol': 'Volume',
+            'o': 'Open',
+            'h': 'High',
+            'l': 'Low', 
+            'c': 'Close',
+            'v': 'Volume'
+        }
+        
+        df_1d.rename(columns=column_map, inplace=True)
+        print(f"After mapping: {list(df_1d.columns)}")
+        
+        # Validate required columns exist
         required_cols = ['Open', 'High', 'Low', 'Close']
         missing_cols = [col for col in required_cols if col not in df_1d.columns]
         if missing_cols:
-            raise ValueError(f"Missing required columns in 1D file: {', '.join(missing_cols)}")
+            available = list(df_1d.columns)
+            raise ValueError(f"1D file missing columns: {missing_cols}. Available columns: {available}")
         
-        if 'time' in df_1d.columns:
-            df_1d['time'] = pd.to_datetime(df_1d['time'])
-            df_1d.set_index('time', inplace=True)
-        elif 'Date' in df_1d.columns:
+        # Handle date column if present
+        if 'Date' in df_1d.columns:
             df_1d['Date'] = pd.to_datetime(df_1d['Date'])
             df_1d.set_index('Date', inplace=True)
         
@@ -648,10 +668,11 @@ def index():
                 csv_data_4h = file_4h.read().decode('utf-8')
                 df_4h = pd.read_csv(io.StringIO(csv_data_4h))
                 
-                if 'time' in df_4h.columns:
-                    df_4h['time'] = pd.to_datetime(df_4h['time'])
-                    df_4h.set_index('time', inplace=True)
-                elif 'Date' in df_4h.columns:
+                # Apply same column mapping
+                df_4h.columns = df_4h.columns.str.lower().str.strip()
+                df_4h.rename(columns=column_map, inplace=True)
+                
+                if 'Date' in df_4h.columns:
                     df_4h['Date'] = pd.to_datetime(df_4h['Date'])
                     df_4h.set_index('Date', inplace=True)
                 
@@ -666,10 +687,11 @@ def index():
                 csv_data_1h = file_1h.read().decode('utf-8')
                 df_1h = pd.read_csv(io.StringIO(csv_data_1h))
                 
-                if 'time' in df_1h.columns:
-                    df_1h['time'] = pd.to_datetime(df_1h['time'])
-                    df_1h.set_index('time', inplace=True)
-                elif 'Date' in df_1h.columns:
+                # Apply same column mapping
+                df_1h.columns = df_1h.columns.str.lower().str.strip()
+                df_1h.rename(columns=column_map, inplace=True)
+                
+                if 'Date' in df_1h.columns:
                     df_1h['Date'] = pd.to_datetime(df_1h['Date'])
                     df_1h.set_index('Date', inplace=True)
                 
@@ -705,31 +727,35 @@ def api_analyze_multi():
         if 'file_1d' not in request.files:
             return jsonify({'error': '1D file is required'}), 400
         
+        # Standard column mapping function
+        def process_dataframe(file_obj):
+            csv_data = file_obj.read().decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_data))
+            
+            # Apply column mapping
+            df.columns = df.columns.str.lower().str.strip()
+            column_map = {
+                'time': 'Date', 'date': 'Date', 'datetime': 'Date',
+                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
+                'volume': 'Volume', 'vol': 'Volume',
+                'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'
+            }
+            df.rename(columns=column_map, inplace=True)
+            
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                df.set_index('Date', inplace=True)
+            
+            return df
+        
         # Process 1D (required)
-        file_1d = request.files['file_1d']
-        csv_data = file_1d.read().decode('utf-8')
-        df = pd.read_csv(io.StringIO(csv_data))
-        if 'time' in df.columns:
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-        elif 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-        timeframe_data['1D'] = df
+        timeframe_data['1D'] = process_dataframe(request.files['file_1d'])
         
         # Process optional files
         for tf_key, file_key in [('4H', 'file_4h'), ('1H', 'file_1h')]:
             if file_key in request.files and request.files[file_key].filename != '':
                 try:
-                    file_data = request.files[file_key].read().decode('utf-8')
-                    df_tf = pd.read_csv(io.StringIO(file_data))
-                    if 'time' in df_tf.columns:
-                        df_tf['time'] = pd.to_datetime(df_tf['time'])
-                        df_tf.set_index('time', inplace=True)
-                    elif 'Date' in df_tf.columns:
-                        df_tf['Date'] = pd.to_datetime(df_tf['Date'])
-                        df_tf.set_index('Date', inplace=True)
-                    timeframe_data[tf_key] = df_tf
+                    timeframe_data[tf_key] = process_dataframe(request.files[file_key])
                 except Exception as e:
                     print(f"Warning: Could not process {tf_key} file: {e}")
         
@@ -846,4 +872,4 @@ def health():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0')
+    app.run(host='0.0.0.0', port=port, debug=True)
