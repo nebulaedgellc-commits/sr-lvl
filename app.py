@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template_string, jsonify
 import pandas as pd
 import numpy as np
-from collections import defaultdict
+# from collections import defaultdict  # Not used, so commented out
 import io
 import os
 
@@ -191,6 +191,8 @@ class MultiTimeframeSRFinder:
         
         # Filter by minimum combined touches
         strong_levels = []
+        if not grouped_levels:
+            grouped_levels = []
         for group in grouped_levels:
             total_touches = sum(level['touches'] for level in group)
             total_weighted_touches = sum(level['weighted_touches'] for level in group)
@@ -218,6 +220,7 @@ class MultiTimeframeSRFinder:
         
         # Sort by weighted touches and timeframe count (multi-timeframe levels are stronger)
         strong_levels.sort(key=lambda x: (x['timeframe_count'], x['weighted_touches']), reverse=True)
+        return strong_levels
         
     def test_tolerance_grouping(self, example_prices, tolerance_percentage):
         """
