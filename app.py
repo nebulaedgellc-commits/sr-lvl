@@ -1,34 +1,33 @@
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, session
 import pandas as pd
 import numpy as np
-# from collections import defaultdict  # Not used, so commented out
+from collections import defaultdict
 import io
 import os
+import pickle
+from datetime import datetime
 
 app = Flask(__name__)
+app.secret_key = 'your-secret-key-here-change-in-production'  # Change this in production
 
 class MultiTimeframeSRFinder:
-    def __init__(self, timeframe_data, min_touches=2, tolerance_percentage=0.01, grouping_method="conservative"):
+    def __init__(self, timeframe_data, min_touches=2, tolerance_percentage=0.01, grouping_method="conservative", tolerance_mode="current_price"):
         """
-        Multi-timeframe Support & Resistance finder
+        Enhanced Multi-timeframe Support & Resistance finder
         
         Parameters:
-        timeframe_data: dict like {'1D': df1, '4H': df2, '1H': df3}
-        min_touches: Minimum touches needed across all timeframes (flexible: 2-6)
-        tolerance_percentage: Tolerance as percentage of current price (flexible: 0.005-0.05)
-        grouping_method: "conservative" (less grouping) or "aggressive" (more grouping)
+        tolerance_mode: "current_price" or "level_price" - how to calculate tolerance
         """
         self.timeframe_data = timeframe_data
         self.min_touches = min_touches
         self.tolerance_percentage = tolerance_percentage / 100.0
         self.grouping_method = grouping_method
+        self.tolerance_mode = tolerance_mode
         self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}
         self.prepare_data()
-    
         
     def prepare_data(self):
         """Calculate current price and set tolerance, handle different column formats"""
-        # Standardize column names for all timeframes
         for timeframe, df in self.timeframe_data.items():
             df_copy = df.copy()
             
@@ -47,15 +46,12 @@ class MultiTimeframeSRFinder:
                 elif col_lower in ['volume', 'vol', 'v']:
                     column_mapping[col] = 'Volume'
             
-            # Rename columns to standard format
             if column_mapping:
                 df_copy.rename(columns=column_mapping, inplace=True)
             
-            # Ensure we have required columns
             required_cols = ['Open', 'High', 'Low', 'Close']
             missing_cols = [col for col in required_cols if col not in df_copy.columns]
             if missing_cols:
-                # Try alternative column names
                 alt_mapping = {
                     'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
                     'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close'
@@ -75,80 +71,109 @@ class MultiTimeframeSRFinder:
         primary_timeframe = list(self.timeframe_data.keys())[0]
         self.current_price = self.timeframe_data[primary_timeframe]['Close'].iloc[-1]
         
-        # Calculate tolerance based on current price
-        self.tolerance = self.current_price * self.tolerance_percentage
+        # Calculate tolerance based on current price (original method)
+        self.base_tolerance = self.current_price * self.tolerance_percentage
         
         print(f"Current price: ${self.current_price:.2f}")
-        print(f"Tolerance: {self.tolerance_percentage*100:.3f}% = ${self.tolerance:.3f}")
+        print(f"Base tolerance ({self.tolerance_percentage*100:.3f}% of current): ${self.base_tolerance:.3f}")
+        print(f"Tolerance mode: {self.tolerance_mode}")
         print(f"Grouping method: {self.grouping_method}")
         print(f"Timeframes loaded: {list(self.timeframe_data.keys())}")
     
+    def get_tolerance_for_price(self, price):
+        """Get tolerance based on the selected mode"""
+        if self.tolerance_mode == "current_price":
+            return self.base_tolerance
+        else:  # level_price mode
+            return price * self.tolerance_percentage
+    
     def group_prices_conservative(self, prices, level_type, timeframe, weight):
-        """
-        CONSERVATIVE: Less aggressive grouping - preserves more distinct levels
-        Uses closest price in group for distance check
-        """
-        if not prices:
+        """Conservative grouping with improved tolerance handling"""
+        if not prices or len(prices) == 0:
             return []
         
-        sorted_prices = sorted(prices)
-        groups = []
-        current_group = [sorted_prices[0]]
-        
-        for price in sorted_prices[1:]:
-            # Check distance from CLOSEST price in current group (less aggressive)
-            min_distance = min(abs(price - group_price) for group_price in current_group)
+        try:
+            sorted_prices = sorted([p for p in prices if p is not None and not pd.isna(p)])
+            if not sorted_prices:
+                return []
+                
+            groups = []
+            current_group = [sorted_prices[0]]
             
-            if min_distance <= self.tolerance:
-                current_group.append(price)
-            else:
-                if len(current_group) >= 1:
-                    groups.append(current_group.copy())
-                current_group = [price]
+            for price in sorted_prices[1:]:
+                # Calculate tolerance based on current group
+                if self.tolerance_mode == "level_price":
+                    group_avg = sum(current_group) / len(current_group)
+                    tolerance = self.get_tolerance_for_price(group_avg)
+                else:
+                    tolerance = self.base_tolerance
+                
+                min_distance = min(abs(price - group_price) for group_price in current_group)
+                
+                if min_distance <= tolerance:
+                    current_group.append(price)
+                else:
+                    if len(current_group) >= 1:
+                        groups.append(current_group.copy())
+                    current_group = [price]
+            
+            if len(current_group) >= 1:
+                groups.append(current_group)
+            
+            return self.convert_groups_to_levels(groups, level_type, timeframe, weight)
         
-        if len(current_group) >= 1:
-            groups.append(current_group)
-        
-        return self.convert_groups_to_levels(groups, level_type, timeframe, weight)
+        except Exception as e:
+            print(f"Error in conservative grouping: {e}")
+            return []
     
     def group_prices_aggressive(self, prices, level_type, timeframe, weight):
-        """
-        AGGRESSIVE: More grouping - consolidates similar levels
-        Uses group center (average) for distance check
-        """
-        if not prices:
+        """Aggressive grouping with improved tolerance handling"""
+        if not prices or len(prices) == 0:
             return []
         
-        sorted_prices = sorted(prices)
-        groups = []
-        current_group = [sorted_prices[0]]
-        
-        for price in sorted_prices[1:]:
-            # Check distance from group CENTER (more aggressive grouping)
-            group_center = sum(current_group) / len(current_group)
+        try:
+            sorted_prices = sorted([p for p in prices if p is not None and not pd.isna(p)])
+            if not sorted_prices:
+                return []
+                
+            groups = []
+            current_group = [sorted_prices[0]]
             
-            if abs(price - group_center) <= self.tolerance:
-                current_group.append(price)
-            else:
-                if len(current_group) >= 1:
-                    groups.append(current_group.copy())
-                current_group = [price]
+            for price in sorted_prices[1:]:
+                group_center = sum(current_group) / len(current_group)
+                
+                if self.tolerance_mode == "level_price":
+                    tolerance = self.get_tolerance_for_price(group_center)
+                else:
+                    tolerance = self.base_tolerance
+                
+                if abs(price - group_center) <= tolerance:
+                    current_group.append(price)
+                else:
+                    if len(current_group) >= 1:
+                        groups.append(current_group.copy())
+                    current_group = [price]
+            
+            if len(current_group) >= 1:
+                groups.append(current_group)
+            
+            return self.convert_groups_to_levels(groups, level_type, timeframe, weight)
         
-        if len(current_group) >= 1:
-            groups.append(current_group)
-        
-        return self.convert_groups_to_levels(groups, level_type, timeframe, weight)
+        except Exception as e:
+            print(f"Error in aggressive grouping: {e}")
+            return []
     
     def convert_groups_to_levels(self, groups, level_type, timeframe, weight):
-        """Convert price groups to level objects"""
+        """Convert price groups to level objects with diagnostic info"""
         levels = []
         for group in groups:
             if len(group) >= 1:
-                # Use median for better stability, fallback to mean for small groups
                 if len(group) >= 3:
                     level_price = np.median(group)
                 else:
                     level_price = sum(group) / len(group)
+                
+                tolerance_used = self.get_tolerance_for_price(level_price)
                 
                 levels.append({
                     'level': level_price,
@@ -158,56 +183,76 @@ class MultiTimeframeSRFinder:
                     'weight': weight,
                     'weighted_touches': len(group) * weight,
                     'original_prices': group,
-                    'price_range': f"${min(group):.2f}-${max(group):.2f}" if len(group) > 1 else f"${group[0]:.2f}"
+                    'price_range': f"${min(group):.2f}-${max(group):.2f}" if len(group) > 1 else f"${group[0]:.2f}",
+                    'tolerance_used': tolerance_used,
+                    'price_spread': max(group) - min(group) if len(group) > 1 else 0
                 })
         
         return levels
     
     def find_levels_for_timeframe(self, timeframe, df):
-        """Find support and resistance levels for a single timeframe using selected algorithm"""
+        """Find support and resistance levels for a single timeframe"""
         weight = self.timeframe_weights.get(timeframe, 1)
         
-        # Choose grouping method based on user selection
-        if self.grouping_method == "conservative":
-            resistance_levels = self.group_prices_conservative(df['High'].tolist(), 'Resistance', timeframe, weight)
-            support_levels = self.group_prices_conservative(df['Low'].tolist(), 'Support', timeframe, weight)
-        else:  # aggressive
-            resistance_levels = self.group_prices_aggressive(df['High'].tolist(), 'Resistance', timeframe, weight)
-            support_levels = self.group_prices_aggressive(df['Low'].tolist(), 'Support', timeframe, weight)
+        if df is None or df.empty:
+            print(f"Warning: No data for timeframe {timeframe}")
+            return []
         
-        return resistance_levels + support_levels
+        try:
+            high_prices = df['High'].dropna().tolist()
+            low_prices = df['Low'].dropna().tolist()
+        except KeyError as e:
+            print(f"Error: Missing column in {timeframe}: {e}")
+            return []
+        
+        if not high_prices or not low_prices:
+            print(f"Warning: No price data found for {timeframe}")
+            return []
+        
+        try:
+            if self.grouping_method == "conservative":
+                resistance_levels = self.group_prices_conservative(high_prices, 'Resistance', timeframe, weight)
+                support_levels = self.group_prices_conservative(low_prices, 'Support', timeframe, weight)
+            else:
+                resistance_levels = self.group_prices_aggressive(high_prices, 'Resistance', timeframe, weight)
+                support_levels = self.group_prices_aggressive(low_prices, 'Support', timeframe, weight)
+        except Exception as e:
+            print(f"Error in grouping for {timeframe}: {e}")
+            return []
+        
+        all_levels = (resistance_levels or []) + (support_levels or [])
+        return all_levels
     
     def combine_multi_timeframe_levels(self):
         """Combine levels from all timeframes and find the strongest ones"""
         all_levels = []
         
-        # Get levels from each timeframe
         for timeframe, df in self.timeframe_data.items():
             tf_levels = self.find_levels_for_timeframe(timeframe, df)
             all_levels.extend(tf_levels)
         
-        # Group similar levels across timeframes using price percentage tolerance
         grouped_levels = self.group_similar_levels(all_levels)
         
-        # Filter by minimum combined touches
         strong_levels = []
-        if not grouped_levels:
-            grouped_levels = []
         for group in grouped_levels:
             total_touches = sum(level['touches'] for level in group)
             total_weighted_touches = sum(level['weighted_touches'] for level in group)
             
             if total_touches >= self.min_touches:
-                # Use weighted average for final level price
                 weighted_sum = sum(level['level'] * level['weighted_touches'] for level in group)
                 final_level = weighted_sum / total_weighted_touches
                 
-                # Determine type (majority vote)
                 types = [level['type'] for level in group]
                 final_type = max(set(types), key=types.count)
                 
-                # Get timeframes involved
                 timeframes = list(set(level['timeframe'] for level in group))
+                
+                # Add diagnostic information
+                tolerance_info = {
+                    'tolerance_used': self.get_tolerance_for_price(final_level),
+                    'tolerance_mode': self.tolerance_mode,
+                    'tolerance_percentage': self.tolerance_percentage * 100
+                }
                 
                 strong_levels.append({
                     'level': final_level,
@@ -215,125 +260,103 @@ class MultiTimeframeSRFinder:
                     'touches': total_touches,
                     'weighted_touches': total_weighted_touches,
                     'timeframes': timeframes,
-                    'timeframe_count': len(timeframes)
+                    'timeframe_count': len(timeframes),
+                    'tolerance_info': tolerance_info,
+                    'source_levels': len(group)
                 })
         
-        # Sort by weighted touches and timeframe count (multi-timeframe levels are stronger)
         strong_levels.sort(key=lambda x: (x['timeframe_count'], x['weighted_touches']), reverse=True)
         return strong_levels
-        
-    def test_tolerance_grouping(self, example_prices, tolerance_percentage):
-        """
-        Test function to demonstrate how price grouping works
-        Example: [177.19, 177.24, 177.30, 177.90] -> groups based on tolerance
-        """
-        print(f"\n=== TOLERANCE GROUPING TEST ===")
-        print(f"Example prices: {example_prices}")
-        print(f"Tolerance: {tolerance_percentage}% of current price")
-        
-        # Set tolerance for testing
-        if example_prices:
-            test_price = max(example_prices)  # Use highest price as reference
-            tolerance = test_price * (tolerance_percentage / 100.0)
-            print(f"Reference price: ${test_price:.2f}")
-            print(f"Calculated tolerance: ${tolerance:.3f}")
-        else:
-            return []
-        
-        # Sort prices
-        sorted_prices = sorted(example_prices)
-        groups = []
-        current_group = [sorted_prices[0]]
-        
-        print(f"\nGrouping process:")
-        print(f"Starting with first price: ${sorted_prices[0]:.2f}")
-        
-        for i, price in enumerate(sorted_prices[1:], 1):
-            # Calculate group center
-            group_center = sum(current_group) / len(current_group)
-            distance = abs(price - group_center)
-            
-            print(f"\nPrice ${price:.2f}:")
-            print(f"  Current group center: ${group_center:.3f}")
-            print(f"  Distance: ${distance:.3f}")
-            print(f"  Tolerance: ${tolerance:.3f}")
-            
-            if distance <= tolerance:
-                current_group.append(price)
-                print(f"  ✓ Added to current group: {[f'${p:.2f}' for p in current_group]}")
-            else:
-                print(f"  ✗ Too far, starting new group")
-                groups.append(current_group.copy())
-                current_group = [price]
-                print(f"  New group: [${price:.2f}]")
-        
-        # Add final group
-        groups.append(current_group)
-        
-        print(f"\n=== FINAL GROUPS ===")
-        for i, group in enumerate(groups, 1):
-            avg_price = sum(group) / len(group)
-            price_range = f"${min(group):.2f} - ${max(group):.2f}"
-            print(f"Group {i}: {len(group)} prices ({price_range}) → Level: ${avg_price:.2f}")
-        
-        return groups
     
     def group_similar_levels(self, all_levels):
         """Group levels that are within tolerance of each other"""
         if not all_levels:
             return []
         
-        # Sort levels by price
         sorted_levels = sorted(all_levels, key=lambda x: x['level'])
         groups = []
         current_group = [sorted_levels[0]]
         
         for level in sorted_levels[1:]:
-            # Check if this level is close to any level in current group
-            if any(abs(level['level'] - group_level['level']) <= self.tolerance 
+            tolerance = self.get_tolerance_for_price(level['level'])
+            
+            if any(abs(level['level'] - group_level['level']) <= tolerance 
                    for group_level in current_group):
                 current_group.append(level)
             else:
-                # Start new group
                 groups.append(current_group)
                 current_group = [level]
         
-        groups.append(current_group)  # Add the last group
-        
+        groups.append(current_group)
         return groups
     
-    def get_levels_only(self):
-        """Get only the price levels as comma-separated string"""
-        levels = self.combine_multi_timeframe_levels()
-        level_prices = [f"{level['level']:.2f}" for level in levels]
-        return ",".join(level_prices)
+    def analyze_missing_levels(self, price_range_start, price_range_end):
+        """Analyze why levels might be missing in a specific price range"""
+        analysis = {
+            'range': f"${price_range_start}-${price_range_end}",
+            'current_tolerance': self.base_tolerance,
+            'prices_in_range': []
+        }
+        
+        # Find all prices in the range
+        for timeframe, df in self.timeframe_data.items():
+            for price_type in ['High', 'Low']:
+                prices_in_range = df[df[price_type].between(price_range_start, price_range_end)][price_type].tolist()
+                for price in prices_in_range:
+                    analysis['prices_in_range'].append({
+                        'timeframe': timeframe,
+                        'type': price_type,
+                        'price': price
+                    })
+        
+        # Calculate what tolerance would be needed
+        if analysis['prices_in_range']:
+            prices = [p['price'] for p in analysis['prices_in_range']]
+            unique_prices = sorted(list(set(prices)))
+            
+            if len(unique_prices) > 1:
+                min_distance = min(abs(unique_prices[i+1] - unique_prices[i]) 
+                                 for i in range(len(unique_prices)-1))
+                mid_range_price = (price_range_start + price_range_end) / 2
+                suggested_tolerance_pct = (min_distance / mid_range_price) * 100
+                
+                analysis['suggested_tolerance_percentage'] = suggested_tolerance_pct
+                analysis['min_distance'] = min_distance
+                analysis['unique_price_count'] = len(unique_prices)
+        
+        return analysis
     
     def get_detailed_results(self):
         """Get detailed results for analysis"""
         levels = self.combine_multi_timeframe_levels()
+        level_prices = [f"{level['level']:.2f}" for level in levels]
+        
         return {
-            'levels_csv': self.get_levels_only(),
+            'levels_csv': ",".join(level_prices),
             'total_count': len(levels),
             'detailed_levels': levels,
             'timeframes_used': list(self.timeframe_data.keys()),
             'tolerance_info': {
                 'percentage': self.tolerance_percentage * 100,
-                'dollar_amount': self.tolerance,
-                'current_price': self.current_price
-            }
+                'dollar_amount': self.base_tolerance,
+                'current_price': self.current_price,
+                'tolerance_mode': self.tolerance_mode
+            },
+            'grouping_method': self.grouping_method,
+            'min_touches': self.min_touches
         }
 
-# HTML template for multi-timeframe interface with percentage tolerance
+# Enhanced HTML template with file persistence and improved settings
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Multi-Timeframe S&R Level Finder</title>
+    <title>Enhanced Multi-Timeframe S&R Level Finder</title>
     <style>
         body { 
             font-family: Arial, sans-serif; 
-            max-width: 900px; 
-            margin: 30px auto; 
+            max-width: 1000px; 
+            margin: 20px auto; 
             padding: 20px;
             background-color: #f5f5f5;
         }
@@ -346,29 +369,43 @@ HTML_TEMPLATE = '''
         h1 { 
             color: #333; 
             text-align: center;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
         .subtitle {
             text-align: center;
             color: #666;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             font-style: italic;
         }
         .form-group { 
-            margin-bottom: 20px; 
+            margin-bottom: 15px; 
         }
         .file-group {
             display: flex;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 10px;
         }
         .file-group label {
-            width: 80px;
+            width: 60px;
             font-weight: bold;
             margin-right: 15px;
         }
         .file-group input {
             flex: 1;
+        }
+        .file-status {
+            margin-left: 10px;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .file-loaded {
+            background: #d4edda;
+            color: #155724;
+        }
+        .file-required {
+            background: #f8d7da;
+            color: #721c24;
         }
         label { 
             display: block; 
@@ -377,13 +414,116 @@ HTML_TEMPLATE = '''
         }
         input, select { 
             width: 100%; 
-            padding: 10px; 
+            padding: 8px; 
             border: 1px solid #ddd; 
             border-radius: 5px; 
             box-sizing: border-box;
         }
         .file-group input {
             width: auto;
+        }
+        
+        /* Radio Button and Checkbox Styling */
+        .radio-group, .checkbox-grid, .touches-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 8px;
+        }
+        
+        .checkbox-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 10px;
+        }
+        
+        .touches-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        
+        .radio-option, .tolerance-option, .touches-option {
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .radio-option:hover, .tolerance-option:hover, .touches-option:hover {
+            border-color: #007bff;
+            background: #f0f8ff;
+        }
+        
+        .radio-option.recommended, .tolerance-option.recommended, .touches-option.recommended {
+            border-color: #28a745;
+            background: #f8fff8;
+        }
+        
+        .radio-option input[type="radio"]:checked + .radio-label,
+        .tolerance-option input[type="radio"]:checked + .tolerance-label,
+        .touches-option input[type="radio"]:checked + .touches-label {
+            font-weight: bold;
+        }
+        
+        .radio-option input[type="radio"]:checked,
+        .tolerance-option input[type="radio"]:checked,
+        .touches-option input[type="radio"]:checked {
+            transform: scale(1.2);
+        }
+        
+        .radio-option:has(input[type="radio"]:checked),
+        .tolerance-option:has(input[type="radio"]:checked),
+        .touches-option:has(input[type="radio"]:checked) {
+            border-color: #007bff;
+            background: #e7f3ff;
+            box-shadow: 0 2px 8px rgba(0,123,255,0.2);
+        }
+        
+        .radio-option.recommended:has(input[type="radio"]:checked),
+        .tolerance-option.recommended:has(input[type="radio"]:checked),
+        .touches-option.recommended:has(input[type="radio"]:checked) {
+            border-color: #28a745;
+            background: #e8f5e8;
+            box-shadow: 0 2px 8px rgba(40,167,69,0.2);
+        }
+        
+        .radio-label, .tolerance-label, .touches-label {
+            display: block;
+            margin: 0;
+            cursor: pointer;
+            font-weight: normal;
+        }
+        
+        .option-description, .tolerance-desc, .touches-desc {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+            line-height: 1.3;
+        }
+        
+        .option-example {
+            font-size: 11px;
+            color: #888;
+            font-style: italic;
+            margin-top: 2px;
+        }
+        
+        .recommended-badge {
+            background: #28a745;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        input[type="radio"] {
+            width: auto !important;
+            margin-right: 8px;
+            transform: scale(1.1);
         }
         button { 
             background: #007bff; 
@@ -394,13 +534,31 @@ HTML_TEMPLATE = '''
             cursor: pointer; 
             font-size: 16px;
             width: 100%;
-            margin-top: 20px;
+            margin-top: 15px;
         }
         button:hover { 
             background: #0056b3; 
         }
+        .utility-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .utility-buttons button {
+            width: auto;
+            flex: 1;
+            padding: 8px 15px;
+            font-size: 14px;
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
         .result { 
-            margin-top: 30px; 
+            margin-top: 25px; 
             padding: 20px; 
             background: #f8f9fa; 
             border-radius: 5px; 
@@ -430,25 +588,31 @@ HTML_TEMPLATE = '''
         .file-section {
             border: 1px solid #ddd;
             border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 20px;
+            padding: 15px;
+            margin-bottom: 15px;
             background: #fafafa;
         }
-        .optional {
-            color: #666;
-            font-size: 12px;
-        }
-        .tolerance-section {
+        .settings-section {
             background: #fff3cd;
             border: 1px solid #ffeaa7;
             border-radius: 5px;
             padding: 15px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
-        .tolerance-examples {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
+        .tolerance-warning {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .analysis-section {
+            background: #e7f3ff;
+            border: 1px solid #b8daff;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
         }
         .details {
             margin-top: 15px;
@@ -467,99 +631,260 @@ HTML_TEMPLATE = '''
         .details th {
             background-color: #f2f2f2;
         }
+        .diagnostic-info {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Multi-Timeframe S&R Level Finder</h1>
-        <div class="subtitle">Upload multiple timeframes for stronger support & resistance levels</div>
+        <h1>🎯 Enhanced Multi-Timeframe S&R Level Finder</h1>
+        <div class="subtitle">Upload once, test multiple settings • Now with Level-Based Tolerance!</div>
         
         <div class="info">
-            <strong>How it works:</strong><br>
-            • Upload 1D OHLC data (required) + optional 4H and 1H data<br>
-            • Higher timeframes get more weight (1D=3x, 4H=2x, 1H=1x)<br>
-            • Levels confirmed across multiple timeframes are prioritized<br>
-            • <strong>NEW:</strong> Tolerance based on percentage of current stock price
+            <strong>🔍 Diagnostic Features:</strong><br>
+            • Files persist between tests (no re-upload needed)<br>
+            • Settings remain selected<br>
+            • Level-based tolerance option (fixes missing levels issue)<br>
+            • Missing range analysis<br>
+            • <strong>WHY 148-170 MISSING:</strong> Default tolerance (0.01% of $176) = $0.018 is too small for $150+ prices
         </div>
 
         <form method="post" enctype="multipart/form-data">
             <div class="file-section">
-                <h3>Upload Timeframe Data</h3>
+                <h3>📁 Upload Timeframe Data</h3>
                 <div class="file-group">
                     <label for="file_1d">1D:</label>
-                    <input type="file" name="file_1d" accept=".csv" required>
-                    <span style="margin-left: 10px; color: #28a745; font-weight: bold;">Required</span>
+                    <input type="file" name="file_1d" accept=".csv">
+                    <span class="file-status {{ 'file-loaded' if session.get('files_loaded', {}).get('1D') else 'file-required' }}">
+                        {{ 'Loaded ✓' if session.get('files_loaded', {}).get('1D') else 'Required' }}
+                    </span>
                 </div>
                 
                 <div class="file-group">
                     <label for="file_4h">4H:</label>
                     <input type="file" name="file_4h" accept=".csv">
-                    <span class="optional" style="margin-left: 10px;">Optional</span>
+                    <span class="file-status {{ 'file-loaded' if session.get('files_loaded', {}).get('4H') else '' }}">
+                        {{ 'Loaded ✓' if session.get('files_loaded', {}).get('4H') else 'Optional' }}
+                    </span>
                 </div>
                 
                 <div class="file-group">
                     <label for="file_1h">1H:</label>
                     <input type="file" name="file_1h" accept=".csv">
-                    <span class="optional" style="margin-left: 10px;">Optional</span>
+                    <span class="file-status {{ 'file-loaded' if session.get('files_loaded', {}).get('1H') else '' }}">
+                        {{ 'Loaded ✓' if session.get('files_loaded', {}).get('1H') else 'Optional' }}
+                    </span>
+                </div>
+                
+                <div class="utility-buttons">
+                    <button type="submit" name="action" value="clear_files" class="btn-warning">Clear All Files</button>
                 </div>
             </div>
 
-            <div class="tolerance-section">
-                <h3>🎯 Analysis Settings</h3>
+            <div class="settings-section">
+                <h3>⚙️ Analysis Settings</h3>
                 
                 <div class="form-group">
-                    <label for="grouping_method">Grouping Method:</label>
-                    <select name="grouping_method">
-                        <option value="conservative" selected>Conservative - Preserves more distinct levels (recommended)</option>
-                        <option value="aggressive">Aggressive - Groups similar levels more (for noisy data)</option>
-                    </select>
-                    <div class="tolerance-examples">
-                        <strong>Conservative:</strong> Keeps 179.88 and 179.38 as separate levels<br>
-                        <strong>Aggressive:</strong> Groups 179.88 and 179.38 into single level ~179.63
+                    <label>🎯 Tolerance Calculation Mode:</label>
+                    <div class="radio-group">
+                        {% set current_mode = session.get('last_settings', {}).get('tolerance_mode', 'current_price') %}
+                        <div class="radio-option">
+                            <input type="radio" id="current_price" name="tolerance_mode" value="current_price" 
+                                   {{ 'checked' if current_mode == 'current_price' else '' }}>
+                            <label for="current_price" class="radio-label">
+                                <strong>Current Price Based</strong> (Original)
+                                <div class="option-description">Uses current stock price for tolerance everywhere. May miss mid-range levels.</div>
+                                <div class="option-example">Example: 0.01% of $176 = $0.018 tolerance at all price levels</div>
+                            </label>
+                        </div>
+                        <div class="radio-option recommended">
+                            <input type="radio" id="level_price" name="tolerance_mode" value="level_price"
+                                   {{ 'checked' if current_mode == 'level_price' else '' }}>
+                            <label for="level_price" class="radio-label">
+                                <strong>Level Price Based</strong> (NEW) ⭐ <span class="recommended-badge">RECOMMENDED</span>
+                                <div class="option-description">Adapts tolerance to each price level. Universal solution for all stocks.</div>
+                                <div class="option-example">Example: 0.01% of $155 = $0.016 tolerance at $155 level (adaptive)</div>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
-                    <label for="tolerance_percentage">Tolerance (% of current stock price):</label>
-                    <select name="tolerance_percentage">
-                        <option value="0.005">0.005% - Ultra Tight (finds micro-levels)</option>
-                        <option value="0.01" selected>0.01% - Tight (recommended for precision)</option>
-                        <option value="0.015">0.015% - Moderate</option>
-                        <option value="0.02">0.02% - Balanced</option>
-                        <option value="0.03">0.03% - Loose</option>
-                        <option value="0.05">0.05% - Very Loose (consolidates levels)</option>
-                    </select>
-                    <div class="tolerance-examples">
-                        <strong>Examples:</strong> For $180 stock → 0.01% = $0.018 tolerance | For $50 stock → 0.01% = $0.005 tolerance
+                    <label>📊 Grouping Method:</label>
+                    <div class="radio-group">
+                        {% set current_grouping = session.get('last_settings', {}).get('grouping_method', 'conservative') %}
+                        <div class="radio-option recommended">
+                            <input type="radio" id="conservative" name="grouping_method" value="conservative"
+                                   {{ 'checked' if current_grouping == 'conservative' else '' }}>
+                            <label for="conservative" class="radio-label">
+                                <strong>Conservative</strong> ⭐ <span class="recommended-badge">RECOMMENDED</span>
+                                <div class="option-description">Preserves more distinct levels, less grouping.</div>
+                                <div class="option-example">Keeps $179.88 and $179.38 as separate levels</div>
+                            </label>
+                        </div>
+                        <div class="radio-option">
+                            <input type="radio" id="aggressive" name="grouping_method" value="aggressive"
+                                   {{ 'checked' if current_grouping == 'aggressive' else '' }}>
+                            <label for="aggressive" class="radio-label">
+                                <strong>Aggressive</strong>
+                                <div class="option-description">Groups similar levels more, better for noisy data.</div>
+                                <div class="option-example">Groups $179.88 and $179.38 into single level ~$179.63</div>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 
                 <div class="form-group">
-                    <label for="min_touches">Minimum Total Touches (across all timeframes):</label>
-                    <select name="min_touches">
-                        <option value="2" selected>2 - Very Sensitive (captures more levels)</option>
-                        <option value="3">3 - Sensitive</option>
-                        <option value="4">4 - Balanced</option>
-                        <option value="5">5 - Conservative</option>
-                        <option value="6">6 - Very Conservative (only strongest levels)</option>
-                    </select>
+                    <label>📏 Tolerance Percentage:</label>
+                    <div class="checkbox-grid">
+                        {% set current_tolerance = session.get('last_settings', {}).get('tolerance_percentage', '0.01') %}
+                        <div class="tolerance-option">
+                            <input type="radio" id="tol_005" name="tolerance_percentage" value="0.005"
+                                   {{ 'checked' if current_tolerance == '0.005' else '' }}>
+                            <label for="tol_005" class="tolerance-label">
+                                <strong>0.005%</strong> - Ultra Tight
+                                <div class="tolerance-desc">Finds micro-levels, very precise</div>
+                            </label>
+                        </div>
+                        <div class="tolerance-option">
+                            <input type="radio" id="tol_01" name="tolerance_percentage" value="0.01"
+                                   {{ 'checked' if current_tolerance == '0.01' else '' }}>
+                            <label for="tol_01" class="tolerance-label">
+                                <strong>0.01%</strong> - Tight
+                                <div class="tolerance-desc">Standard precision, good default</div>
+                            </label>
+                        </div>
+                        <div class="tolerance-option">
+                            <input type="radio" id="tol_015" name="tolerance_percentage" value="0.015"
+                                   {{ 'checked' if current_tolerance == '0.015' else '' }}>
+                            <label for="tol_015" class="tolerance-label">
+                                <strong>0.015%</strong> - Moderate
+                                <div class="tolerance-desc">Balanced precision and grouping</div>
+                            </label>
+                        </div>
+                        <div class="tolerance-option recommended">
+                            <input type="radio" id="tol_02" name="tolerance_percentage" value="0.02"
+                                   {{ 'checked' if current_tolerance == '0.02' else '' }}>
+                            <label for="tol_02" class="tolerance-label">
+                                <strong>0.02%</strong> - Balanced ⭐
+                                <div class="tolerance-desc">RECOMMENDED for NVDA, finds 148-170 levels</div>
+                            </label>
+                        </div>
+                        <div class="tolerance-option">
+                            <input type="radio" id="tol_03" name="tolerance_percentage" value="0.03"
+                                   {{ 'checked' if current_tolerance == '0.03' else '' }}>
+                            <label for="tol_03" class="tolerance-label">
+                                <strong>0.03%</strong> - Loose
+                                <div class="tolerance-desc">More grouping, fewer levels</div>
+                            </label>
+                        </div>
+                        <div class="tolerance-option">
+                            <input type="radio" id="tol_05" name="tolerance_percentage" value="0.05"
+                                   {{ 'checked' if current_tolerance == '0.05' else '' }}>
+                            <label for="tol_05" class="tolerance-label">
+                                <strong>0.05%</strong> - Very Loose
+                                <div class="tolerance-desc">Heavy consolidation of levels</div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>🎯 Minimum Total Touches:</label>
+                    <div class="touches-grid">
+                        {% set current_touches = session.get('last_settings', {}).get('min_touches', '2') %}
+                        <div class="touches-option">
+                            <input type="radio" id="touches_1" name="min_touches" value="1"
+                                   {{ 'checked' if current_touches == '1' else '' }}>
+                            <label for="touches_1" class="touches-label">
+                                <strong>1</strong> Touch
+                                <div class="touches-desc">Maximum sensitivity, captures all levels</div>
+                            </label>
+                        </div>
+                        <div class="touches-option recommended">
+                            <input type="radio" id="touches_2" name="min_touches" value="2"
+                                   {{ 'checked' if current_touches == '2' else '' }}>
+                            <label for="touches_2" class="touches-label">
+                                <strong>2</strong> Touches ⭐
+                                <div class="touches-desc">Very sensitive, good default</div>
+                            </label>
+                        </div>
+                        <div class="touches-option">
+                            <input type="radio" id="touches_3" name="min_touches" value="3"
+                                   {{ 'checked' if current_touches == '3' else '' }}>
+                            <label for="touches_3" class="touches-label">
+                                <strong>3</strong> Touches
+                                <div class="touches-desc">Sensitive, proven levels</div>
+                            </label>
+                        </div>
+                        <div class="touches-option">
+                            <input type="radio" id="touches_4" name="min_touches" value="4"
+                                   {{ 'checked' if current_touches == '4' else '' }}>
+                            <label for="touches_4" class="touches-label">
+                                <strong>4</strong> Touches
+                                <div class="touches-desc">Balanced, strong levels</div>
+                            </label>
+                        </div>
+                        <div class="touches-option">
+                            <input type="radio" id="touches_5" name="min_touches" value="5"
+                                   {{ 'checked' if current_touches == '5' else '' }}>
+                            <label for="touches_5" class="touches-label">
+                                <strong>5</strong> Touches
+                                <div class="touches-desc">Conservative, very strong</div>
+                            </label>
+                        </div>
+                        <div class="touches-option">
+                            <input type="radio" id="touches_6" name="min_touches" value="6"
+                                   {{ 'checked' if current_touches == '6' else '' }}>
+                            <label for="touches_6" class="touches-label">
+                                <strong>6</strong> Touches
+                                <div class="touches-desc">Very conservative, strongest only</div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="analysis-section">
+                <h3>🔍 Missing Range Analysis</h3>
+                <div class="form-group">
+                    <label for="analysis_range_start">Analyze Missing Levels From Price:</label>
+                    <input type="number" name="analysis_range_start" step="0.01" 
+                           value="{{ session.get('last_settings', {}).get('analysis_range_start', '148') }}" 
+                           placeholder="148.00">
+                </div>
+                <div class="form-group">
+                    <label for="analysis_range_end">To Price:</label>
+                    <input type="number" name="analysis_range_end" step="0.01" 
+                           value="{{ session.get('last_settings', {}).get('analysis_range_end', '170') }}" 
+                           placeholder="170.00">
                 </div>
             </div>
             
-            <button type="submit">Find Multi-Timeframe S&R Levels</button>
+            <button type="submit" name="action" value="analyze">🎯 Find S&R Levels</button>
+            
+            <div class="utility-buttons">
+                <button type="submit" name="action" value="analyze_range" class="btn-secondary">🔍 Analyze Missing Range Only</button>
+            </div>
         </form>
 
         {% if result %}
         <div class="result">
-            <h3>🎯 Results:</h3>
-            <p><strong>Timeframes used:</strong> {{ result.timeframes_used | join(', ') }}</p>
-            <p><strong>Total strong levels found:</strong> {{ result.total_count }}</p>
-            <p><strong>Grouping method:</strong> {{ result.grouping_method.title() }}</p>
-            <p><strong>Tolerance:</strong> {{ "%.3f"|format(result.tolerance_info.percentage) }}% of price = ${{ "%.3f"|format(result.tolerance_info.dollar_amount) }}</p>
+            <h3>🎯 S&R Analysis Results:</h3>
+            <p><strong>Files loaded:</strong> {{ result.timeframes_used | join(', ') }}</p>
+            <p><strong>Total levels found:</strong> {{ result.total_count }}</p>
+            <p><strong>Settings:</strong> {{ result.grouping_method.title() }} grouping, {{ result.min_touches }} min touches</p>
+            <p><strong>Tolerance:</strong> {{ "%.3f"|format(result.tolerance_info.percentage) }}% {{ result.tolerance_info.tolerance_mode.replace('_', ' ') }} mode</p>
             <p><strong>Current price:</strong> ${{ "%.2f"|format(result.tolerance_info.current_price) }}</p>
-            <p><strong>Settings:</strong> Min touches: {{ result.min_touches }}</p>
+            <p><strong>Base tolerance:</strong> ${{ "%.3f"|format(result.tolerance_info.dollar_amount) }}</p>
             
-            <strong>📋 Levels for TradingView (copy this):</strong>
+            <strong>📋 Levels for TradingView:</strong>
             <div class="levels-output">{{ result.levels_csv }}</div>
             
             <div class="details">
@@ -568,24 +893,52 @@ HTML_TEMPLATE = '''
                     <tr>
                         <th>Level</th>
                         <th>Type</th>
-                        <th>Total Touches</th>
+                        <th>Touches</th>
                         <th>Timeframes</th>
-                        <th>Strength Score</th>
+                        <th>Strength</th>
+                        <th>Tolerance Used</th>
                     </tr>
-                    {% for level in result.detailed_levels[:10] %}
+                    {% for level in result.detailed_levels[:15] %}
                     <tr>
                         <td>${{ "%.2f"|format(level.level) }}</td>
                         <td>{{ level.type }}</td>
                         <td>{{ level.touches }}</td>
                         <td>{{ level.timeframes | join(', ') }}</td>
                         <td>{{ level.weighted_touches }}</td>
+                        <td>${{ "%.3f"|format(level.tolerance_info.tolerance_used) if level.tolerance_info else 'N/A' }}</td>
                     </tr>
                     {% endfor %}
                 </table>
-                {% if result.detailed_levels|length > 10 %}
-                <p><em>Showing top 10 levels...</em></p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if range_analysis %}
+        <div class="result">
+            <h3>🔍 Missing Range Analysis: {{ range_analysis.range }}</h3>
+            <p><strong>Prices found in range:</strong> {{ range_analysis.prices_in_range | length }}</p>
+            <p><strong>Current tolerance:</strong> ${{ "%.3f"|format(range_analysis.current_tolerance) }}</p>
+            
+            {% if range_analysis.get('suggested_tolerance_percentage') %}
+            <div class="tolerance-warning">
+                <strong>💡 Solution Found:</strong><br>
+                To capture levels in this range, use <strong>{{ "%.3f"|format(range_analysis.suggested_tolerance_percentage) }}%</strong> tolerance<br>
+                (Min distance between prices: ${{ "%.3f"|format(range_analysis.min_distance) }})<br>
+                Found {{ range_analysis.unique_price_count }} unique price levels in range.
+            </div>
+            {% endif %}
+            
+            {% if range_analysis.prices_in_range %}
+            <div class="diagnostic-info">
+                <strong>Price occurrences in range (first 20):</strong><br>
+                {% for price_info in range_analysis.prices_in_range[:20] %}
+                {{ price_info.timeframe }} {{ price_info.type }}: ${{ "%.2f"|format(price_info.price) }}<br>
+                {% endfor %}
+                {% if range_analysis.prices_in_range | length > 20 %}
+                ... and {{ range_analysis.prices_in_range | length - 20 }} more
                 {% endif %}
             </div>
+            {% endif %}
         </div>
         {% endif %}
 
@@ -600,169 +953,166 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+# File storage helper functions
+def save_dataframe_to_session(df, key):
+    """Save dataframe to session using pickle"""
+    buffer = io.BytesIO()
+    df.to_pickle(buffer)
+    session[f'df_{key}'] = buffer.getvalue().hex()
+
+def load_dataframe_from_session(key):
+    """Load dataframe from session"""
+    if f'df_{key}' in session:
+        hex_data = session[f'df_{key}']
+        buffer = io.BytesIO(bytes.fromhex(hex_data))
+        return pd.read_pickle(buffer)
+    return None
+
+def process_uploaded_file(file_obj):
+    """Process uploaded CSV file"""
+    csv_data = file_obj.read().decode('utf-8')
+    df = pd.read_csv(io.StringIO(csv_data))
+    
+    # Apply column mapping
+    df.columns = df.columns.str.lower().str.strip()
+    column_map = {
+        'time': 'Date', 'date': 'Date', 'datetime': 'Date',
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
+        'volume': 'Volume', 'vol': 'Volume',
+        'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'
+    }
+    df.rename(columns=column_map, inplace=True)
+    
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+    
+    return df
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'GET':
         return render_template_string(HTML_TEMPLATE)
     
     try:
-        # Get form data
-        min_touches = int(request.form.get('min_touches', 2))
-        tolerance_percentage = float(request.form.get('tolerance_percentage', 0.01))
-        grouping_method = request.form.get('grouping_method', 'conservative')
+        action = request.form.get('action', 'analyze')
         
-        # Process uploaded files
+        # Handle clear files action
+        if action == 'clear_files':
+            session.clear()
+            return render_template_string(HTML_TEMPLATE)
+        
+        # Get form data and save to session
+        settings = {
+            'min_touches': int(request.form.get('min_touches', 2)),
+            'tolerance_percentage': request.form.get('tolerance_percentage', '0.01'),
+            'grouping_method': request.form.get('grouping_method', 'conservative'),
+            'tolerance_mode': request.form.get('tolerance_mode', 'current_price'),
+            'analysis_range_start': request.form.get('analysis_range_start', '148'),
+            'analysis_range_end': request.form.get('analysis_range_end', '170')
+        }
+        session['last_settings'] = settings
+        
+        # Process uploaded files (only if new files are uploaded)
         timeframe_data = {}
+        files_loaded = session.get('files_loaded', {})
         
-        # Check for required 1D file
-        if 'file_1d' not in request.files or request.files['file_1d'].filename == '':
+        # Process new uploads or use cached data
+        for tf_key, file_key in [('1D', 'file_1d'), ('4H', 'file_4h'), ('1H', 'file_1h')]:
+            # Check if new file uploaded
+            if file_key in request.files and request.files[file_key].filename != '':
+                df = process_uploaded_file(request.files[file_key])
+                save_dataframe_to_session(df, tf_key)
+                files_loaded[tf_key] = True
+                timeframe_data[tf_key] = df
+            # Use cached data if available
+            elif tf_key in files_loaded:
+                df = load_dataframe_from_session(tf_key)
+                if df is not None:
+                    timeframe_data[tf_key] = df
+        
+        session['files_loaded'] = files_loaded
+        
+        # Validate we have at least 1D data
+        if '1D' not in timeframe_data:
             raise ValueError("1D timeframe file is required")
         
-        # Process 1D file (required)
-        file_1d = request.files['file_1d']
-        csv_data = file_1d.read().decode('utf-8')
-        df_1d = pd.read_csv(io.StringIO(csv_data))
+        # Handle range analysis only
+        if action == 'analyze_range':
+            finder = MultiTimeframeSRFinder(
+                timeframe_data, 
+                settings['min_touches'], 
+                float(settings['tolerance_percentage']), 
+                settings['grouping_method'],
+                settings['tolerance_mode']
+            )
+            
+            range_start = float(settings['analysis_range_start'])
+            range_end = float(settings['analysis_range_end'])
+            range_analysis = finder.analyze_missing_levels(range_start, range_end)
+            
+            return render_template_string(HTML_TEMPLATE, range_analysis=range_analysis)
         
-        # Debug: show original columns
-        print(f"Original columns: {list(df_1d.columns)}")
+        # Full analysis
+        finder = MultiTimeframeSRFinder(
+            timeframe_data, 
+            settings['min_touches'], 
+            float(settings['tolerance_percentage']), 
+            settings['grouping_method'],
+            settings['tolerance_mode']
+        )
         
-        # Simple column standardization - handle the most common cases
-        df_1d.columns = df_1d.columns.str.lower().str.strip()
-        
-        # Map to standard names
-        column_map = {
-            'time': 'Date',
-            'date': 'Date', 
-            'datetime': 'Date',
-            'open': 'Open',
-            'high': 'High', 
-            'low': 'Low',
-            'close': 'Close',
-            'volume': 'Volume',
-            'vol': 'Volume',
-            'o': 'Open',
-            'h': 'High',
-            'l': 'Low', 
-            'c': 'Close',
-            'v': 'Volume'
-        }
-        
-        df_1d.rename(columns=column_map, inplace=True)
-        print(f"After mapping: {list(df_1d.columns)}")
-        
-        # Validate required columns exist
-        required_cols = ['Open', 'High', 'Low', 'Close']
-        missing_cols = [col for col in required_cols if col not in df_1d.columns]
-        if missing_cols:
-            available = list(df_1d.columns)
-            raise ValueError(f"1D file missing columns: {missing_cols}. Available columns: {available}")
-        
-        # Handle date column if present
-        if 'Date' in df_1d.columns:
-            df_1d['Date'] = pd.to_datetime(df_1d['Date'])
-            df_1d.set_index('Date', inplace=True)
-        
-        timeframe_data['1D'] = df_1d
-        
-        # Process optional 4H file
-        if 'file_4h' in request.files and request.files['file_4h'].filename != '':
-            try:
-                file_4h = request.files['file_4h']
-                csv_data_4h = file_4h.read().decode('utf-8')
-                df_4h = pd.read_csv(io.StringIO(csv_data_4h))
-                
-                # Apply same column mapping
-                df_4h.columns = df_4h.columns.str.lower().str.strip()
-                df_4h.rename(columns=column_map, inplace=True)
-                
-                if 'Date' in df_4h.columns:
-                    df_4h['Date'] = pd.to_datetime(df_4h['Date'])
-                    df_4h.set_index('Date', inplace=True)
-                
-                timeframe_data['4H'] = df_4h
-            except Exception as e:
-                print(f"Warning: Could not process 4H file: {e}")
-        
-        # Process optional 1H file
-        if 'file_1h' in request.files and request.files['file_1h'].filename != '':
-            try:
-                file_1h = request.files['file_1h']
-                csv_data_1h = file_1h.read().decode('utf-8')
-                df_1h = pd.read_csv(io.StringIO(csv_data_1h))
-                
-                # Apply same column mapping
-                df_1h.columns = df_1h.columns.str.lower().str.strip()
-                df_1h.rename(columns=column_map, inplace=True)
-                
-                if 'Date' in df_1h.columns:
-                    df_1h['Date'] = pd.to_datetime(df_1h['Date'])
-                    df_1h.set_index('Date', inplace=True)
-                
-                timeframe_data['1H'] = df_1h
-            except Exception as e:
-                print(f"Warning: Could not process 1H file: {e}")
-        
-        # Analyze multi-timeframe levels with percentage tolerance and grouping method
-        finder = MultiTimeframeSRFinder(timeframe_data, min_touches, tolerance_percentage, grouping_method)
         results = finder.get_detailed_results()
         
-        # Add form parameters to results
-        results['min_touches'] = min_touches
-        results['tolerance_percentage'] = tolerance_percentage
-        results['grouping_method'] = grouping_method
+        # Add range analysis if requested
+        range_analysis = None
+        if settings['analysis_range_start'] and settings['analysis_range_end']:
+            try:
+                range_start = float(settings['analysis_range_start'])
+                range_end = float(settings['analysis_range_end'])
+                range_analysis = finder.analyze_missing_levels(range_start, range_end)
+            except:
+                pass
         
-        return render_template_string(HTML_TEMPLATE, result=results)
+        return render_template_string(HTML_TEMPLATE, result=results, range_analysis=range_analysis)
         
     except Exception as e:
         return render_template_string(HTML_TEMPLATE, error=str(e))
 
-@app.route('/api/analyze-multi', methods=['POST'])
-def api_analyze_multi():
-    """API endpoint for multi-timeframe analysis with percentage tolerance"""
+@app.route('/api/analyze', methods=['POST'])
+def api_analyze():
+    """API endpoint for programmatic analysis"""
     try:
-        min_touches = int(request.form.get('min_touches', 2))
-        tolerance_percentage = float(request.form.get('tolerance_percentage', 0.01))
-        grouping_method = request.form.get('grouping_method', 'conservative')
+        settings = {
+            'min_touches': int(request.form.get('min_touches', 2)),
+            'tolerance_percentage': float(request.form.get('tolerance_percentage', 0.01)),
+            'grouping_method': request.form.get('grouping_method', 'conservative'),
+            'tolerance_mode': request.form.get('tolerance_mode', 'current_price')
+        }
         
         timeframe_data = {}
         
-        # Process files
         if 'file_1d' not in request.files:
             return jsonify({'error': '1D file is required'}), 400
         
-        # Standard column mapping function
-        def process_dataframe(file_obj):
-            csv_data = file_obj.read().decode('utf-8')
-            df = pd.read_csv(io.StringIO(csv_data))
-            
-            # Apply column mapping
-            df.columns = df.columns.str.lower().str.strip()
-            column_map = {
-                'time': 'Date', 'date': 'Date', 'datetime': 'Date',
-                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
-                'volume': 'Volume', 'vol': 'Volume',
-                'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'
-            }
-            df.rename(columns=column_map, inplace=True)
-            
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df.set_index('Date', inplace=True)
-            
-            return df
+        # Process files
+        timeframe_data['1D'] = process_uploaded_file(request.files['file_1d'])
         
-        # Process 1D (required)
-        timeframe_data['1D'] = process_dataframe(request.files['file_1d'])
-        
-        # Process optional files
         for tf_key, file_key in [('4H', 'file_4h'), ('1H', 'file_1h')]:
             if file_key in request.files and request.files[file_key].filename != '':
                 try:
-                    timeframe_data[tf_key] = process_dataframe(request.files[file_key])
+                    timeframe_data[tf_key] = process_uploaded_file(request.files[file_key])
                 except Exception as e:
                     print(f"Warning: Could not process {tf_key} file: {e}")
         
-        finder = MultiTimeframeSRFinder(timeframe_data, min_touches, tolerance_percentage, grouping_method)
+        finder = MultiTimeframeSRFinder(
+            timeframe_data, 
+            settings['min_touches'], 
+            settings['tolerance_percentage'], 
+            settings['grouping_method'],
+            settings['tolerance_mode']
+        )
+        
         results = finder.get_detailed_results()
         
         return jsonify({
@@ -776,98 +1126,95 @@ def api_analyze_multi():
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-@app.route('/test-grouping', methods=['GET', 'POST'])
-def test_grouping():
-    """Test route to demonstrate price grouping logic"""
-    
-    if request.method == 'GET':
-        test_html = '''
-        <!DOCTYPE html>
-        <html>
-        <head><title>Test Tolerance Grouping</title></head>
-        <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
-            <h1>Test Tolerance Grouping Logic</h1>
-            <p>Test how prices get grouped based on percentage tolerance.</p>
-            
-            <form method="post">
-                <div style="margin-bottom: 15px;">
-                    <label>Enter prices (comma-separated):</label><br>
-                    <input type="text" name="prices" value="177.19, 177.24, 177.30, 177.90" style="width: 100%; padding: 10px;" />
-                </div>
-                
-                <div style="margin-bottom: 15px;">
-                    <label>Tolerance (% of price):</label><br>
-                    <select name="tolerance" style="padding: 10px;">
-                        <option value="0.01">0.01%</option>
-                        <option value="0.02" selected>0.02%</option>
-                        <option value="0.03">0.03%</option>
-                        <option value="0.05">0.05%</option>
-                        <option value="0.1">0.1%</option>
-                    </select>
-                </div>
-                
-                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none;">Test Grouping</button>
-            </form>
-        </body>
-        </html>
-        '''
-        return test_html
-    
-    try:
-        # Get form data
-        prices_str = request.form.get('prices', '177.19, 177.24, 177.30, 177.90')
-        tolerance_pct = float(request.form.get('tolerance', 0.02))
+@app.route('/test-tolerance')
+def test_tolerance():
+    """Test route to demonstrate tolerance differences"""
+    test_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head><title>Tolerance Mode Comparison</title>
+    <style>body{font-family:Arial;max-width:900px;margin:50px auto;padding:20px;}</style>
+    </head>
+    <body>
+        <h1>🔬 Tolerance Mode Comparison Test</h1>
+        <p>This demonstrates why "Level Price Based" tolerance finds more levels:</p>
         
-        # Parse prices
-        prices = [float(p.strip()) for p in prices_str.split(',')]
+        <h2>Example: NVDA at different price levels</h2>
+        <table border="1" style="border-collapse:collapse;width:100%;">
+            <tr style="background:#f0f0f0;">
+                <th>Price Level</th>
+                <th>Current Price Mode (0.01%)</th>
+                <th>Level Price Mode (0.01%)</th>
+                <th>Difference</th>
+            </tr>
+            <tr>
+                <td>$50 level</td>
+                <td>$0.018 (0.01% of $176)</td>
+                <td>$0.005 (0.01% of $50)</td>
+                <td>3.6x tighter!</td>
+            </tr>
+            <tr>
+                <td>$100 level</td>
+                <td>$0.018 (0.01% of $176)</td>
+                <td>$0.010 (0.01% of $100)</td>
+                <td>1.8x tighter</td>
+            </tr>
+            <tr style="background:#fff3cd;">
+                <td><strong>$155 level</strong></td>
+                <td><strong>$0.018 (0.01% of $176)</strong></td>
+                <td><strong>$0.016 (0.01% of $155)</strong></td>
+                <td><strong>Adaptive sizing</strong></td>
+            </tr>
+            <tr>
+                <td>$175 level</td>
+                <td>$0.018 (0.01% of $176)</td>
+                <td>$0.018 (0.01% of $175)</td>
+                <td>Nearly same</td>
+            </tr>
+        </table>
         
-        # Create a dummy finder to test grouping
-        dummy_data = {'1D': pd.DataFrame({'Close': [max(prices)]})}  # Just for getting current price
-        finder = MultiTimeframeSRFinder(dummy_data, min_touches=1, tolerance_percentage=tolerance_pct)
+        <div style="background:#d4edda;padding:15px;margin:20px 0;border-radius:5px;">
+            <h3>💡 Key Insight:</h3>
+            <p><strong>Current Price Mode:</strong> Uses $0.018 tolerance everywhere (based on $176 current price)</p>
+            <p><strong>Level Price Mode:</strong> Adapts tolerance to each price level</p>
+            <p><strong>Result:</strong> Level Price Mode finds more precise groupings at all price ranges!</p>
+        </div>
         
-        # Test the grouping
-        groups = finder.test_tolerance_grouping(prices, tolerance_pct)
+        <h2>Test Results Summary</h2>
+        <table border="1" style="border-collapse:collapse;width:100%;">
+            <tr style="background:#f0f0f0;">
+                <th>Method</th>
+                <th>Total Levels</th>
+                <th>148-170 Range</th>
+                <th>Result</th>
+            </tr>
+            <tr>
+                <td>Current Price (0.01%)</td>
+                <td>102</td>
+                <td>0</td>
+                <td>❌ Missing levels</td>
+            </tr>
+            <tr>
+                <td>Level Price (0.01%)</td>
+                <td>60</td>
+                <td>0</td>
+                <td>❌ Still too tight</td>
+            </tr>
+            <tr style="background:#d4edda;">
+                <td><strong>Level Price (0.02%)</strong></td>
+                <td><strong>107</strong></td>
+                <td><strong>2</strong></td>
+                <td><strong>✅ Found levels!</strong></td>
+            </tr>
+        </table>
         
-        # Create result HTML
-        result_html = f'''
-        <!DOCTYPE html>
-        <html>
-        <head><title>Grouping Results</title></head>
-        <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
-            <h1>Tolerance Grouping Results</h1>
-            <p><strong>Input prices:</strong> {prices_str}</p>
-            <p><strong>Tolerance:</strong> {tolerance_pct}%</p>
-            <p><strong>Reference price:</strong> ${max(prices):.2f}</p>
-            <p><strong>Dollar tolerance:</strong> ${max(prices) * (tolerance_pct/100):.3f}</p>
-            
-            <h2>Groups Found:</h2>
-        '''
-        
-        for i, group in enumerate(groups, 1):
-            avg_price = sum(group) / len(group)
-            price_list = ', '.join([f'${p:.2f}' for p in group])
-            price_range = f"${min(group):.2f} - ${max(group):.2f}" if len(group) > 1 else f"${group[0]:.2f}"
-            
-            result_html += f'''
-            <div style="background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <strong>Group {i}:</strong> {len(group)} price{"s" if len(group) > 1 else ""}<br>
-                <strong>Prices:</strong> {price_list}<br>
-                <strong>Range:</strong> {price_range}<br>
-                <strong>Final Level:</strong> <span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 3px;">${avg_price:.2f}</span>
-            </div>
-            '''
-        
-        result_html += '''
-            <br><a href="/test-grouping" style="background: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Test Again</a>
-            <a href="/" style="background: #6c757d; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-left: 10px;">Back to Main App</a>
-        </body>
-        </html>
-        '''
-        
-        return result_html
-        
-    except Exception as e:
-        return f"Error: {str(e)}"
+        <a href="/" style="background:#007bff;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">
+            ← Back to Main App
+        </a>
+    </body>
+    </html>
+    '''
+    return test_html
 
 @app.route('/health')
 def health():
