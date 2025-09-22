@@ -54,7 +54,7 @@ class MultiTimeframeSRFinder:
                 if missing_cols:
                     raise ValueError(f"Missing required columns in {timeframe}: {missing_cols}")
             
-            df_copy.dropna(inplace=True)
+            # df_copy.dropna(inplace=True)
             self.timeframe_data[timeframe] = df_copy
         
         primary_timeframe = list(self.timeframe_data.keys())[0]
@@ -785,7 +785,7 @@ def index():
         # Remove any remaining template syntax
         template = template.replace('{% if result %}', '<!-- ').replace('{% if range_analysis %}', '<!-- ').replace('{% if error %}', '<!-- ').replace('{% endif %}', ' -->')
         
-        return template
+        return render_template_string(HTML_TEMPLATE, files_loaded=files_loaded, last_settings=last_settings)
     
     try:
         action = request.form.get('action', 'analyze')
@@ -888,6 +888,6 @@ def test():
     return '<h1>Multi-Timeframe S&R App is Working!</h1><p>Go to <a href="/">/</a> to upload files and find levels.</p>'
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8000))
     # Production-ready configuration
     app.run(host='0.0.0.0', port=port, debug=False)
