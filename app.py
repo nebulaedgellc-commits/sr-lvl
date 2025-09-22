@@ -9,13 +9,17 @@ app.secret_key = 'sr-levels-secret-key-2024'
 
 class MultiTimeframeSRFinder:
     def __init__(self, timeframe_data, min_touches=2, tolerance_percentage=0.01, grouping_method="conservative", tolerance_mode="current_price"):
-        self.timeframe_data = timeframe_data
-        self.min_touches = min_touches
-        self.tolerance_percentage = tolerance_percentage / 100.0
-        self.grouping_method = grouping_method
-        self.tolerance_mode = tolerance_mode
-        self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}
-        self.prepare_data()
+        try:
+            self.timeframe_data = timeframe_data
+            self.min_touches = min_touches
+            self.tolerance_percentage = tolerance_percentage / 100.0
+            self.grouping_method = grouping_method
+            self.tolerance_mode = tolerance_mode
+            self.timeframe_weights = {'1D': 3, '4H': 2, '1H': 1}
+            self.prepare_data()
+        except Exception as e:
+            print(f"Error initializing SR Finder: {e}")
+            raise(e)
         
     def prepare_data(self):
         for timeframe, df in self.timeframe_data.items():
@@ -868,6 +872,7 @@ def index():
                 range_end = float(settings['analysis_range_end'])
                 range_analysis = finder.analyze_missing_levels(range_start, range_end)
             except:
+                print("Invalid range inputs, skipping range analysis")
                 pass
         
         return render_template_string(HTML_TEMPLATE, result=results, range_analysis=range_analysis,
